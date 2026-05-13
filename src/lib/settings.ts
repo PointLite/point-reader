@@ -21,8 +21,8 @@ export const defaultReadingSettings: ReadingSettings = {
 };
 
 export const defaultSortState: SortState = {
-  field: 'updatedAt',
-  direction: 'desc',
+  field: 'title',
+  direction: 'asc',
 };
 
 export async function loadReadingSettings(): Promise<ReadingSettings> {

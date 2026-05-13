@@ -1,25 +1,71 @@
 import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
-import { ChevronLeft, Trash2 } from 'lucide-react-native';
+import { File as ExpoFile } from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
+import { BookOpen, ChevronDown, ChevronLeft, ChevronUp, Pencil, Trash2 } from 'lucide-react-native';
 import React, { useCallback, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { InkButton } from '@/components/ink-button';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
 import { deleteBooks, getBook } from '@/lib/books';
+import { extractEpubDetailMetadata, type EpubDetailMetadata } from '@/lib/epubMetadata';
 import type { Book } from '@/types/reader';
 
 export default function BookDetailScreen() {
   const { bookId } = useLocalSearchParams<{ bookId: string }>();
   const [book, setBook] = useState<Book | null>(null);
+  const [fileSize, setFileSize] = useState<number | null>(null);
+  const [fileCreatedAt, setFileCreatedAt] = useState<number | null>(null);
+  const [fileUpdatedAt, setFileUpdatedAt] = useState<number | null>(null);
+  const [metadata, setMetadata] = useState<EpubDetailMetadata | null>(null);
+  const [expandedSections, setExpandedSections] = useState({
+    metadata: true,
+    series: true,
+    description: true,
+  });
 
   useFocusEffect(
     useCallback(() => {
-      if (bookId) getBook(bookId).then(setBook);
+      let mounted = true;
+      async function load() {
+        if (!bookId) return;
+        const nextBook = await getBook(bookId);
+        if (!mounted) return;
+        setBook(nextBook);
+        if (!nextBook) {
+          setFileSize(null);
+          setFileCreatedAt(null);
+          setFileUpdatedAt(null);
+          setMetadata(null);
+          return;
+        }
+        const info = await FileSystem.getInfoAsync(nextBook.fileUri);
+        let createdAt: number | null = null;
+        try {
+          createdAt = new ExpoFile(nextBook.fileUri).creationTime;
+        } catch {
+          createdAt = null;
+        }
+        if (mounted) {
+          setFileSize(info.exists ? info.size ?? null : null);
+          setFileUpdatedAt(info.exists ? info.modificationTime * 1000 : null);
+          setFileCreatedAt(createdAt);
+        }
+        if (nextBook.format === 'epub') {
+          const nextMetadata = await extractEpubDetailMetadata(nextBook.fileUri);
+          if (mounted) setMetadata(nextMetadata);
+        } else if (mounted) {
+          setMetadata(null);
+        }
+      }
+      load();
+      return () => {
+        mounted = false;
+      };
     }, [bookId])
   );
 
-  const remove = () => {
+  const removeBook = useCallback(() => {
     if (!book) return;
     Alert.alert('删除书籍', `确定删除《${book.title}》？`, [
       { text: '取消', style: 'cancel' },
@@ -32,7 +78,7 @@ export default function BookDetailScreen() {
         },
       },
     ]);
-  };
+  }, [book]);
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -48,25 +94,72 @@ export default function BookDetailScreen() {
       </View>
 
       {book ? (
-        <View style={styles.content}>
-          <View style={styles.cover}>
-            <Text style={styles.format}>{book.format.toUpperCase()}</Text>
+        <ScrollView contentContainerStyle={styles.content}>
+          <View style={styles.hero}>
+            <View style={styles.cover}>
+              {book.coverUri ? (
+                <Image source={{ uri: book.coverUri }} style={styles.coverImage} resizeMode="cover" />
+              ) : (
+                <View style={styles.fallbackCover}>
+                  <BookOpen size={34} color={Colors.light.text} />
+                  <Text style={styles.format}>{book.format.toUpperCase()}</Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.summary}>
+              <Text style={styles.bookTitle}>{metadata?.title || book.title}</Text>
+              <Text style={styles.author}>{metadata?.author || book.author || '未知作者'}</Text>
+              <View style={styles.actionRow}>
+                <ActionIcon accessibilityLabel="编辑书籍占位" icon={<Pencil size={22} color={Colors.light.text} strokeWidth={2.6} />} />
+                <ActionIcon
+                  accessibilityLabel="删除书籍"
+                  onPress={removeBook}
+                  icon={<Trash2 size={23} color={Colors.light.danger} strokeWidth={2.4} />}
+                />
+              </View>
+            </View>
           </View>
-          <View style={styles.panel}>
-            <Text style={styles.bookTitle}>{book.title}</Text>
-            <Text style={styles.author}>{book.author}</Text>
-            <Detail label="格式" value={book.format.toUpperCase()} />
-            <Detail label="阅读进度" value={`${Math.round(book.progress * 100)}%`} />
-            <Detail label="章节位置" value={`第 ${book.currentChapter + 1} 节`} />
-            <Detail label="文件路径" value={book.fileUri} />
-          </View>
-          <InkButton
-            label="继续阅读"
-            variant="primary"
-            onPress={() => router.push({ pathname: '/reader/[bookId]', params: { bookId: book.id } })}
+
+          <SectionHeader
+            title="元数据"
+            expanded={expandedSections.metadata}
+            onPress={() => setExpandedSections((current) => ({ ...current, metadata: !current.metadata }))}
           />
-          <InkButton label="删除书籍" icon={Trash2} variant="danger" onPress={remove} />
-        </View>
+          {expandedSections.metadata ? (
+            <>
+              <View style={styles.metaGrid}>
+                <MetadataItem label="出版商" value={metadata?.publisher || '未知'} />
+                <MetadataItem label="出版日期" value={formatEpubDate(metadata?.publishedAt)} align="right" />
+                <MetadataItem label="更新日期" value={formatTimestamp(fileUpdatedAt)} />
+                <MetadataItem label="添加日期" value={formatTimestamp(fileCreatedAt)} align="right" />
+                <MetadataItem label="语言" value={metadata?.language || '未知'} />
+                <MetadataItem label="主题" value={metadata?.subject || '未知'} align="right" />
+                <MetadataItem label="格式" value={book.format.toUpperCase()} />
+                <MetadataItem label="文件大小" value={formatFileSize(fileSize)} align="right" />
+              </View>
+              <MetadataItem label="标识符" value={metadata?.identifier || '未知'} full />
+            </>
+          ) : null}
+
+          <SectionHeader
+            title="系列"
+            expanded={expandedSections.series}
+            onPress={() => setExpandedSections((current) => ({ ...current, series: !current.series }))}
+          />
+          {expandedSections.series ? (
+            <View style={styles.metaGrid}>
+              <MetadataItem label="系列" value={metadata?.series || '未知'} />
+              <MetadataItem label="系列编号" value={metadata?.seriesIndex || '未知'} align="right" />
+            </View>
+          ) : null}
+
+          <SectionHeader
+            title="简介"
+            expanded={expandedSections.description}
+            onPress={() => setExpandedSections((current) => ({ ...current, description: !current.description }))}
+          />
+          {expandedSections.description ? <Text style={styles.description}>{metadata?.description || '未知'}</Text> : null}
+        </ScrollView>
       ) : (
         <View style={styles.content}>
           <Text style={styles.author}>没有找到这本书。</Text>
@@ -76,13 +169,68 @@ export default function BookDetailScreen() {
   );
 }
 
-function Detail({ label, value }: { label: string; value: string }) {
+function ActionIcon({ icon, accessibilityLabel, onPress }: { icon: React.ReactNode; accessibilityLabel: string; onPress?: () => void }) {
   return (
-    <View style={styles.detail}>
-      <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue}>{value}</Text>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      disabled={!onPress}
+      onPress={onPress}
+      style={({ pressed }) => [styles.placeholderIcon, pressed && styles.pressedIcon]}>
+      {icon}
+    </Pressable>
+  );
+}
+
+function SectionHeader({ title, expanded, onPress }: { title: string; expanded: boolean; onPress: () => void }) {
+  const Icon = expanded ? ChevronUp : ChevronDown;
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={`${expanded ? '收起' : '展开'}${title}`} onPress={onPress} style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      <Icon size={24} color={Colors.light.text} strokeWidth={3} />
+    </Pressable>
+  );
+}
+
+function MetadataItem({
+  label,
+  value,
+  align = 'left',
+  full = false,
+}: {
+  label: string;
+  value: string;
+  align?: 'left' | 'right';
+  full?: boolean;
+}) {
+  return (
+    <View style={[styles.metaItem, full && styles.metaItemFull, align === 'right' && styles.metaItemRight]}>
+      <Text style={styles.metaLabel}>{label}</Text>
+      <Text style={styles.metaValue} numberOfLines={full ? 1 : 2}>
+        {value}
+      </Text>
     </View>
   );
+}
+
+function formatEpubDate(value?: string) {
+  if (!value) return '未知';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '未知';
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+function formatTimestamp(timestamp: number | null) {
+  if (!timestamp) return '未知';
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return '未知';
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+function formatFileSize(size: number | null) {
+  if (!size || size <= 0) return '未知';
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(2)} MB`;
 }
 
 const styles = StyleSheet.create({
@@ -113,53 +261,114 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
   },
   content: {
-    padding: Spacing.three,
+    paddingHorizontal: Spacing.four,
+    paddingTop: Spacing.two,
+    paddingBottom: Spacing.six,
+    gap: Spacing.four,
+  },
+  hero: {
+    flexDirection: 'row',
     gap: Spacing.three,
+    alignItems: 'flex-start',
   },
   cover: {
-    width: 132,
-    height: 184,
-    borderRadius: Radius.medium,
-    borderWidth: 2,
-    borderColor: Colors.light.text,
+    width: 104,
+    height: 148,
+    borderRadius: Radius.small,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
     backgroundColor: Colors.light.surfaceMuted,
+    overflow: 'hidden',
+  },
+  coverImage: {
+    width: '100%',
+    height: '100%',
+  },
+  fallbackCover: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: Spacing.two,
   },
   format: {
-    fontSize: 22,
+    fontSize: 15,
     fontWeight: '900',
     color: Colors.light.text,
   },
-  panel: {
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: Radius.medium,
-    backgroundColor: Colors.light.surface,
-    padding: Spacing.three,
-    gap: Spacing.three,
+  summary: {
+    flex: 1,
+    minHeight: 148,
+    paddingTop: Spacing.one,
   },
   bookTitle: {
-    fontSize: 24,
+    fontSize: 23,
     lineHeight: 30,
     fontWeight: '900',
     color: Colors.light.text,
   },
   author: {
-    fontSize: 16,
+    marginTop: Spacing.two,
+    fontSize: 18,
+    lineHeight: 24,
     color: Colors.light.textSecondary,
   },
-  detail: {
-    gap: Spacing.one,
+  actionRow: {
+    marginTop: Spacing.two,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
   },
-  detailLabel: {
-    fontSize: 12,
+  placeholderIcon: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pressedIcon: {
+    opacity: 0.55,
+  },
+  sectionHeader: {
+    marginTop: Spacing.three,
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  sectionTitle: {
+    fontSize: 24,
+    lineHeight: 30,
     fontWeight: '900',
     color: Colors.light.textSecondary,
   },
-  detailValue: {
-    fontSize: 15,
-    lineHeight: 21,
+  metaGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: Spacing.four,
+  },
+  metaItem: {
+    width: '50%',
+    gap: Spacing.one,
+  },
+  metaItemFull: {
+    width: '100%',
+  },
+  metaItemRight: {
+    alignItems: 'flex-end',
+  },
+  metaLabel: {
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '900',
     color: Colors.light.text,
+  },
+  metaValue: {
+    fontSize: 20,
+    lineHeight: 26,
+    color: Colors.light.textSecondary,
+  },
+  description: {
+    fontSize: 20,
+    lineHeight: 32,
+    color: Colors.light.textSecondary,
   },
 });

@@ -1,14 +1,28 @@
-import Slider from '@react-native-community/slider';
 import { Reader, useReader, type Location, type Toc } from '@epubjs-react-native/core';
 import * as Battery from 'expo-battery';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { StatusBar } from 'expo-status-bar';
-import { ChevronLeft, ChevronRight, List, Sun, Type, X } from 'lucide-react-native';
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  List,
+  ListChevronsUpDown,
+  RotateCcw,
+  RotateCw,
+  SquareDashed,
+  Sun,
+  Type,
+  X,
+  type LucideIcon,
+} from 'lucide-react-native';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  AppState,
   FlatList,
   Image,
   Modal,
@@ -23,11 +37,12 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 
-import { InkButton } from '@/components/ink-button';
 import { PdfPane } from '@/components/reader/pdf-pane';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
 import { getBook, updateBookProgress } from '@/lib/books';
+import { loadEpubHtmlBook, type EpubHtmlBook } from '@/lib/epubContent';
 import { useLegacyEpubFileSystem } from '@/lib/epubFileSystem';
 import {
   fontFamilyFor,
@@ -43,6 +58,12 @@ const INITIAL_TEXT_BLOCKS = 18;
 const TEXT_BLOCK_INCREMENT = 12;
 const MIN_PREVIEW_SCALE = 1;
 const MAX_PREVIEW_SCALE = 4;
+const STYLE_PROGRESS_GUARD_MS = 2500;
+const PROGRESS_SAVE_DEBOUNCE_MS = 100;
+const READER_TOOLBAR_HEIGHT = 68;
+const ACTIVE_TOOL_COLOR = '#3478F6';
+const BATTERY_BODY_WIDTH = 30;
+const BATTERY_BODY_HEIGHT = 16;
 
 const EPUB_IMAGE_PREVIEW_SCRIPT = `
 (function () {
@@ -53,6 +74,10 @@ const EPUB_IMAGE_PREVIEW_SCRIPT = `
 
   window.__pointReaderImagePreviewInstalled = true;
   var lastSentAt = 0;
+  var lastProgressSentAt = 0;
+  var lastUserScrollAt = 0;
+  var jumpGeneration = 0;
+  var progressTimer = null;
   var reactNativeWebview = window.ReactNativeWebView !== undefined && window.ReactNativeWebView !== null ? window.ReactNativeWebView : window;
 
   function sendImage(src) {
@@ -71,6 +96,52 @@ const EPUB_IMAGE_PREVIEW_SCRIPT = `
       type: 'point-reader:content-tap'
     }));
   }
+
+  function sendReaderError(message) {
+    reactNativeWebview.postMessage(JSON.stringify({
+      type: 'point-reader:reader-error',
+      message: String(message || 'unknown')
+    }));
+  }
+
+  function sendReadingProgress() {
+    try {
+      if (typeof rendition === 'undefined' || typeof book === 'undefined' || !rendition || !book) return;
+      var location = rendition.currentLocation && rendition.currentLocation();
+      var cfi = location && location.start && location.start.cfi;
+      if (!location || !cfi || !book.locations || !book.locations.percentageFromCfi) return;
+      var progress = book.locations.percentageFromCfi(cfi);
+      reactNativeWebview.postMessage(JSON.stringify({
+        type: 'point-reader:reading-progress',
+        progress: progress,
+        location: location
+      }));
+    } catch (error) {}
+  }
+
+  function scheduleReadingProgress() {
+    if (Date.now() < (window.__pointReaderSuppressProgressUntil || 0)) return;
+    var now = Date.now();
+    if (now - lastProgressSentAt > 120) {
+      lastProgressSentAt = now;
+      sendReadingProgress();
+      return;
+    }
+    if (progressTimer) return;
+    progressTimer = setTimeout(function () {
+      progressTimer = null;
+      lastProgressSentAt = Date.now();
+      sendReadingProgress();
+    }, 120);
+  }
+
+  function noteUserScrollIntent() {
+    lastUserScrollAt = Date.now();
+    window.__pointReaderLastUserScrollAt = lastUserScrollAt;
+  }
+
+  window.__pointReaderScheduleReadingProgress = scheduleReadingProgress;
+  window.__pointReaderSendReaderError = sendReaderError;
 
   function findImageTarget(target) {
     var current = target;
@@ -125,9 +196,33 @@ const EPUB_IMAGE_PREVIEW_SCRIPT = `
       image.setAttribute('data-point-reader-preview', '1');
       image.style.cursor = 'pointer';
       image.addEventListener('click', function (event) {
+        if (event.currentTarget.__pointReaderSuppressClickUntil && Date.now() < event.currentTarget.__pointReaderSuppressClickUntil) {
+          return;
+        }
         openPreview(documentRef, event.currentTarget, event);
       }, true);
+      image.addEventListener('touchstart', function (event) {
+        if (!event.touches || event.touches.length !== 1) return;
+        event.currentTarget.__pointReaderTouchMoved = false;
+        event.currentTarget.__pointReaderTouchStartX = event.touches[0].clientX;
+        event.currentTarget.__pointReaderTouchStartY = event.touches[0].clientY;
+      }, true);
+      image.addEventListener('touchmove', function (event) {
+        if (!event.touches || event.touches.length !== 1) return;
+        var startX = event.currentTarget.__pointReaderTouchStartX || 0;
+        var startY = event.currentTarget.__pointReaderTouchStartY || 0;
+        var dx = Math.abs(event.touches[0].clientX - startX);
+        var dy = Math.abs(event.touches[0].clientY - startY);
+        if (dx > 8 || dy > 8) {
+          event.currentTarget.__pointReaderTouchMoved = true;
+        }
+      }, true);
       image.addEventListener('touchend', function (event) {
+        if (event.currentTarget.__pointReaderTouchMoved) {
+          event.currentTarget.__pointReaderSuppressClickUntil = Date.now() + 450;
+          event.currentTarget.__pointReaderTouchMoved = false;
+          return;
+        }
         if (event.changedTouches && event.changedTouches.length === 1) {
           openPreview(documentRef, event.currentTarget, event);
         }
@@ -168,12 +263,32 @@ const EPUB_IMAGE_PREVIEW_SCRIPT = `
     }, true);
   }
 
+  function bindDocumentProgress(contents) {
+    var documentRef = contents && (contents.document || (contents.content && contents.content.document));
+    if (!documentRef || documentRef.__pointReaderProgressBound) return;
+    documentRef.__pointReaderProgressBound = true;
+    var viewRef = documentRef.defaultView || window;
+    documentRef.addEventListener('scroll', scheduleReadingProgress, true);
+    documentRef.addEventListener('touchmove', function () {
+      noteUserScrollIntent();
+      scheduleReadingProgress();
+    }, true);
+    documentRef.addEventListener('touchend', function () {
+      noteUserScrollIntent();
+      scheduleReadingProgress();
+    }, true);
+    if (viewRef && viewRef.addEventListener) {
+      viewRef.addEventListener('scroll', scheduleReadingProgress, true);
+    }
+  }
+
   function bindRenderedContents() {
     try {
       var rendered = rendition.getContents();
       for (var index = 0; index < rendered.length; index += 1) {
         bindImages(rendered[index]);
         bindDocumentTap(rendered[index]);
+        bindDocumentProgress(rendered[index]);
       }
     } catch (error) {}
   }
@@ -183,14 +298,18 @@ const EPUB_IMAGE_PREVIEW_SCRIPT = `
       setTimeout(function () {
         bindImages(contents);
         bindDocumentTap(contents);
+        bindDocumentProgress(contents);
       }, 0);
     });
     rendition.on('rendered', bindRenderedContents);
+    rendition.on('relocated', scheduleReadingProgress);
     setTimeout(bindRenderedContents, 500);
+    setTimeout(scheduleReadingProgress, 900);
   }
 
   true;
 })();
+true;
 `;
 
 type TextBlock = {
@@ -201,6 +320,58 @@ type TextBlock = {
   text: string;
 };
 
+type PendingProgress = {
+  progress: number;
+  chapter: number;
+  offset: number;
+  location?: string | null;
+};
+
+type RestoreProgressGuard = {
+  bookId: string;
+  progress: number;
+  until: number;
+};
+
+type TextScrollRequest = {
+  blockIndex: number;
+  nonce: number;
+};
+
+type EpubSeekRequest = {
+  progress: number;
+  nonce: number;
+};
+
+function createReaderTheme(settings: ReadingSettings) {
+  const padding = Math.round(18 + settings.paddingScale * 18);
+  const lineHeight = settings.lineHeightScale.toFixed(2);
+  const fontSize = `${settings.fontSize}px`;
+  const fontFamily = settings.fontFamily === 'serif' ? 'serif' : settings.fontFamily === 'mono' ? 'monospace' : 'sans-serif';
+
+  return {
+    html: {
+      background: readerBackgrounds[settings.background],
+    },
+    body: {
+      color: readerForeground,
+      background: readerBackgrounds[settings.background],
+      'font-size': fontSize,
+      'line-height': `${lineHeight} !important`,
+      'padding-left': `${padding}px !important`,
+      'padding-right': `${padding}px !important`,
+      margin: '0 !important',
+      'box-sizing': 'border-box',
+      'font-family': fontFamily,
+    },
+    'p, div, span, li': {
+      'font-size': `${fontSize} !important`,
+      'line-height': `${lineHeight} !important`,
+      'font-family': `${fontFamily} !important`,
+    },
+  };
+}
+
 export default function ReaderScreen() {
   const { bookId } = useLocalSearchParams<{ bookId: string }>();
   const [book, setBook] = useState<Book | null>(null);
@@ -208,16 +379,37 @@ export default function ReaderScreen() {
   const [chapters, setChapters] = useState<ReaderChapter[]>([]);
   const [renderedBlockCount, setRenderedBlockCount] = useState(INITIAL_TEXT_BLOCKS);
   const [toolbarOpen, setToolbarOpen] = useState(false);
-  const [sheet, setSheet] = useState<'toc' | 'theme' | 'font' | null>(null);
+  const [sheet, setSheet] = useState<'toc' | 'theme' | 'progress' | 'font' | null>(null);
   const [time, setTime] = useState('');
   const [battery, setBattery] = useState<number | null>(null);
   const [epubToc, setEpubToc] = useState<Toc>([]);
+  const [epubHtmlBook, setEpubHtmlBook] = useState<EpubHtmlBook | null>(null);
+  const [epubJumpRequest, setEpubJumpRequest] = useState<{ index: number; nonce: number } | null>(null);
+  const [epubSeekRequest, setEpubSeekRequest] = useState<EpubSeekRequest | null>(null);
   const [epubLocation, setEpubLocation] = useState<string | undefined>(undefined);
+  const [currentEpubHref, setCurrentEpubHref] = useState<string | undefined>(undefined);
+  const [epubReaderKey, setEpubReaderKey] = useState(0);
   const [epubChapterTitle, setEpubChapterTitle] = useState('');
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const [displayProgress, setDisplayProgress] = useState(0);
+  const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
+  const [textWindowStart, setTextWindowStart] = useState(0);
+  const [textScrollRequest, setTextScrollRequest] = useState<TextScrollRequest | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingProgress = useRef<PendingProgress | null>(null);
+  const bookRef = useRef<Book | null>(null);
+  const settingsRef = useRef<ReadingSettings>(defaultReadingSettings);
+  const mountedRef = useRef(true);
+  const restoreProgressGuard = useRef<RestoreProgressGuard | null>(null);
   const lastToolbarToggleAt = useRef(0);
+
+  useEffect(() => {
+    bookRef.current = book;
+  }, [book]);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
 
   useFocusEffect(
     useCallback(() => {
@@ -226,16 +418,59 @@ export default function ReaderScreen() {
         if (!bookId) return;
         const [nextBook, nextSettings] = await Promise.all([getBook(bookId), loadReadingSettings()]);
         if (!mounted) return;
-        setBook(nextBook);
         setSettings(nextSettings);
-        setDisplayProgress(nextBook?.progress ?? 0);
-        setEpubLocation(nextBook?.format === 'epub' ? nextBook.currentLocation ?? undefined : undefined);
-        setEpubChapterTitle('');
-        if (nextBook?.format === 'txt') {
-          setChapters(await loadTextChapters(nextBook));
-          setRenderedBlockCount(Math.max(INITIAL_TEXT_BLOCKS, Math.floor(nextBook.currentOffset) + TEXT_BLOCK_INCREMENT));
-        } else {
+        if (!nextBook) {
+          setBook(null);
           setChapters([]);
+          setTextWindowStart(0);
+          setTextScrollRequest(null);
+          return;
+        }
+        setDisplayProgress(nextBook?.progress ?? 0);
+        setCurrentChapterIndex(nextBook?.currentChapter ?? 0);
+        restoreProgressGuard.current =
+          nextBook && nextBook.progress > 0.005
+            ? { bookId: nextBook.id, progress: nextBook.progress, until: Date.now() + 6000 }
+            : null;
+        setEpubLocation(nextBook?.format === 'epub' ? nextBook.currentLocation ?? undefined : undefined);
+        setCurrentEpubHref(undefined);
+        setEpubReaderKey((key) => key + 1);
+        setEpubChapterTitle('');
+        setEpubHtmlBook(null);
+        setEpubSeekRequest(null);
+        if (nextBook?.format === 'txt') {
+          const nextChapters = await loadTextChapters(nextBook);
+          if (!mounted) return;
+          const nextTextBlocks = buildTextBlocks(nextChapters);
+          const restoredOffset = Math.round(clamp(Math.floor(nextBook.currentOffset), 0, Math.max(0, nextTextBlocks.length - 1)));
+          const windowStart = Math.max(0, restoredOffset - 2);
+          const restoredBook = { ...nextBook, currentOffset: restoredOffset };
+          const restoredChapter = nextTextBlocks[restoredOffset]?.chapterIndex ?? nextBook.currentChapter;
+          setBook(restoredBook);
+          setCurrentChapterIndex(restoredChapter);
+          setChapters(nextChapters);
+          setTextWindowStart(windowStart);
+          setTextScrollRequest(null);
+          setRenderedBlockCount(Math.min(nextTextBlocks.length, Math.max(windowStart + INITIAL_TEXT_BLOCKS, restoredOffset + TEXT_BLOCK_INCREMENT)));
+        } else if (nextBook.format === 'epub') {
+          const nextEpub = await loadEpubHtmlBook(nextBook.fileUri);
+          if (!mounted) return;
+          setChapters([]);
+          setTextWindowStart(0);
+          setTextScrollRequest(null);
+          setEpubToc(nextEpub.chapters.map((chapter) => ({ id: chapter.id, href: chapter.href, label: chapter.title, subitems: [] })));
+          const { index: restoredIndex, offset: restoredOffset } = resolveEpubRestorePosition(nextBook, nextEpub);
+          const restoredBook = { ...nextBook, currentChapter: restoredIndex, currentOffset: restoredOffset };
+          setBook(restoredBook);
+          setCurrentChapterIndex(restoredIndex);
+          setCurrentEpubHref(nextEpub.chapters[restoredIndex]?.href);
+          setEpubChapterTitle(nextEpub.chapters[restoredIndex]?.title ?? '');
+          setEpubHtmlBook(nextEpub);
+        } else {
+          setBook(nextBook);
+          setChapters([]);
+          setTextWindowStart(0);
+          setTextScrollRequest(null);
         }
       }
       load();
@@ -260,7 +495,11 @@ export default function ReaderScreen() {
       const now = new Date();
       setTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
       const level = await Battery.getBatteryLevelAsync();
-      setBattery(Math.round(level * 100));
+      if (Number.isFinite(level) && level >= 0) {
+        setBattery(Math.round(clamp(level, 0, 1) * 100));
+      } else {
+        setBattery((current) => current ?? 0);
+      }
     };
     refreshStatus();
     const timer = setInterval(refreshStatus, 60000);
@@ -271,52 +510,185 @@ export default function ReaderScreen() {
 
   const updateSettings = async (patch: Partial<ReadingSettings>) => {
     const next = { ...settings, ...patch };
+    settingsRef.current = next;
     setSettings(next);
     await saveReadingSettings(next);
   };
 
+  const flushProgressSave = useCallback(async () => {
+    const currentBook = bookRef.current;
+    const pending = pendingProgress.current;
+    if (!currentBook || !pending) return;
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    pendingProgress.current = null;
+    await updateBookProgress(currentBook.id, pending.progress, pending.chapter, pending.offset, pending.location);
+    if (mountedRef.current) {
+      setBook((current) =>
+        current?.id === currentBook.id
+          ? {
+              ...current,
+              progress: pending.progress,
+              currentChapter: pending.chapter,
+              currentOffset: pending.offset,
+              currentLocation: pending.location ?? current.currentLocation,
+            }
+          : current
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      void flushProgressSave();
+    };
+  }, [flushProgressSave]);
+
+  useFocusEffect(
+    useCallback(
+      () => () => {
+        void flushProgressSave();
+      },
+      [flushProgressSave]
+    )
+  );
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') {
+        void flushProgressSave();
+      }
+    });
+    return () => subscription.remove();
+  }, [flushProgressSave]);
+
   const scheduleProgressSave = useCallback(
     (progress: number, chapter: number, offset: number, location?: string | null) => {
       const nextProgress = Math.max(0, Math.min(1, progress));
+      const currentBook = bookRef.current;
+      const guard = restoreProgressGuard.current;
+      if (
+        currentBook &&
+        guard?.bookId === currentBook.id &&
+        Date.now() < guard.until &&
+        nextProgress + 0.005 < guard.progress
+      ) {
+        return;
+      }
+      restoreProgressGuard.current = null;
       setDisplayProgress(nextProgress);
-      if (!book) return;
+      setCurrentChapterIndex(chapter);
+      pendingProgress.current = {
+        progress: nextProgress,
+        chapter,
+        offset,
+        location,
+      };
+      if (!currentBook) return;
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
-        updateBookProgress(book.id, nextProgress, chapter, offset, location);
-      }, 280);
+        void flushProgressSave();
+      }, PROGRESS_SAVE_DEBOUNCE_MS);
     },
-    [book]
+    [flushProgressSave]
   );
 
   const textBlocks = useMemo(() => buildTextBlocks(chapters), [chapters]);
   const visibleTextBlocks = useMemo(
-    () => textBlocks.slice(0, Math.min(renderedBlockCount, textBlocks.length)),
-    [renderedBlockCount, textBlocks]
+    () => {
+      const end = Math.min(Math.max(renderedBlockCount, textWindowStart + INITIAL_TEXT_BLOCKS), textBlocks.length);
+      return textBlocks.slice(textWindowStart, end);
+    },
+    [renderedBlockCount, textBlocks, textWindowStart]
   );
 
+  const closeToolbar = useCallback(() => {
+    setSheet(null);
+    setToolbarOpen(false);
+  }, []);
   const toggleToolbar = useCallback(() => {
     const now = Date.now();
     if (now - lastToolbarToggleAt.current < 260) return;
     lastToolbarToggleAt.current = now;
-    setToolbarOpen((value) => !value);
+    setToolbarOpen((value) => {
+      if (value) setSheet(null);
+      return !value;
+    });
   }, []);
   const openImagePreview = useCallback((uri: string) => {
     setSheet(null);
     setToolbarOpen(false);
     setPreviewImageUri(uri);
   }, []);
+  const guardProgressForStyleChange = useCallback(() => {
+    const currentBook = bookRef.current;
+    if (!currentBook || displayProgress <= 0.005) return;
+    restoreProgressGuard.current = {
+      bookId: currentBook.id,
+      progress: displayProgress,
+      until: Date.now() + STYLE_PROGRESS_GUARD_MS,
+    };
+  }, [displayProgress]);
+  const seekToProgress = useCallback(
+    (progress: number) => {
+      const nextProgress = clamp(progress, 0, 1);
+      const currentBook = bookRef.current;
+      if (!currentBook) return;
+
+      if (currentBook.format === 'epub' && epubHtmlBook?.chapters.length) {
+        const absolute = nextProgress * epubHtmlBook.chapters.length;
+        const index = Math.min(epubHtmlBook.chapters.length - 1, Math.max(0, Math.floor(absolute)));
+        const offset = index === epubHtmlBook.chapters.length - 1 && nextProgress >= 0.999 ? 1 : clamp(absolute - index, 0, 1);
+        const href = epubHtmlBook.chapters[index]?.href ?? '';
+        setCurrentChapterIndex(index);
+        setCurrentEpubHref(href);
+        setEpubChapterTitle(epubHtmlBook.chapters[index]?.title ?? '');
+        setEpubSeekRequest({ progress: nextProgress, nonce: Date.now() });
+        scheduleProgressSave(nextProgress, index, offset, createEpubScrollLocation(index, offset, href));
+        return;
+      }
+
+      if (currentBook.format === 'txt' && textBlocks.length) {
+        const blockIndex = Math.round(nextProgress * Math.max(0, textBlocks.length - 1));
+        const block = textBlocks[blockIndex];
+        if (!block) return;
+        setTextWindowStart(Math.max(0, blockIndex - 2));
+        setRenderedBlockCount(Math.max(INITIAL_TEXT_BLOCKS, blockIndex + TEXT_BLOCK_INCREMENT * 3));
+        setTextScrollRequest({ blockIndex, nonce: Date.now() });
+        scheduleProgressSave(nextProgress, block.chapterIndex, block.blockIndex);
+      }
+    },
+    [epubHtmlBook, scheduleProgressSave, textBlocks]
+  );
+  const closeReader = useCallback(async () => {
+    await flushProgressSave();
+    router.back();
+  }, [flushProgressSave]);
   const handleEpubProgress = useCallback(
     (nextProgress: number, location?: Location | null, chapterTitle?: string) => {
+      const normalizedProgress = clamp(nextProgress, 0, 1);
       const cfi = location?.start?.cfi ?? null;
+      const href = location?.start?.href;
       const sectionIndex = location?.start?.index ?? 0;
-      const locationValue = location?.start?.location ?? nextProgress;
-      scheduleProgressSave(nextProgress, sectionIndex, locationValue, cfi);
+      const locationValue = location?.start?.location ?? normalizedProgress;
+      scheduleProgressSave(normalizedProgress, sectionIndex, locationValue, cfi);
+      if (href) {
+        setCurrentEpubHref(href);
+      }
       if (chapterTitle) {
         setEpubChapterTitle((current) => (current === chapterTitle ? current : chapterTitle));
       }
     },
     [scheduleProgressSave]
   );
+  const handleEpubDisplayError = useCallback(() => {
+    if (!epubLocation) return;
+    setEpubLocation(undefined);
+    setEpubReaderKey((key) => key + 1);
+  }, [epubLocation]);
 
   if (!book) {
     return (
@@ -326,34 +698,72 @@ export default function ReaderScreen() {
     );
   }
 
-  const progress = Math.round(displayProgress * 100);
+  const progressText = `${(displayProgress * 100).toFixed(1)}%`;
+  const currentChapterTitle =
+    book.format === 'txt' ? chapters[currentChapterIndex]?.title || book.title : epubChapterTitle || book.title;
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor }]}>
       <StatusBar hidden={!settings.alwaysShowStatusBar} />
       <View style={[styles.readerTop, { backgroundColor }]}>
         <Text style={styles.chapterTitle} numberOfLines={1}>
-          {book.format === 'txt' ? chapters[book.currentChapter]?.title || book.title : epubChapterTitle || book.title}
+          {currentChapterTitle}
         </Text>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="关闭阅读"
-          onPress={() => router.back()}
-          style={styles.closeButton}>
-          <X size={22} color={readerForeground} />
+          disabled={!toolbarOpen}
+          pointerEvents={toolbarOpen ? 'auto' : 'none'}
+          onPress={closeReader}
+          style={[styles.readerCloseButton, !toolbarOpen && styles.readerCloseButtonHidden]}>
+          <X size={22} color={readerForeground} strokeWidth={2.2} />
         </Pressable>
       </View>
 
       <View style={styles.readerBody}>
-        {book.format === 'epub' ? (
+        {book.format === 'epub' && settings.mode === 'scroll' ? (
+          epubHtmlBook ? (
+            <EpubScrollPane
+              key={`${book.id}:${epubReaderKey}`}
+              book={epubHtmlBook}
+              settings={settings}
+              initialIndex={currentChapterIndex}
+              initialOffset={book.currentOffset}
+              initialProgress={book.progress}
+              jumpRequest={epubJumpRequest}
+              seekRequest={epubSeekRequest}
+              onToggleToolbar={toggleToolbar}
+              onImagePress={openImagePreview}
+              onProgress={(progress, chapterIndex, href, chapterOffset) => {
+                const chapter = epubHtmlBook.chapters[chapterIndex];
+                setCurrentChapterIndex(chapterIndex);
+                setCurrentEpubHref(href);
+                if (chapter?.title) {
+                  setEpubChapterTitle((current) => (current === chapter.title ? current : chapter.title));
+                }
+                scheduleProgressSave(progress, chapterIndex, chapterOffset, createEpubScrollLocation(chapterIndex, chapterOffset, href));
+              }}
+            />
+          ) : (
+            <ActivityIndicator color={readerForeground} />
+          )
+        ) : book.format === 'epub' ? (
           <EpubPane
             book={book}
             settings={settings}
             onToc={setEpubToc}
             location={epubLocation}
+            readerKey={epubReaderKey}
             onToggleToolbar={toggleToolbar}
             onProgress={handleEpubProgress}
+            onChapterChange={(title, href) => {
+              setEpubChapterTitle((current) => (current === title ? current : title));
+              if (href) {
+                setCurrentEpubHref(href);
+              }
+            }}
             onImagePress={openImagePreview}
+            onDisplayError={handleEpubDisplayError}
           />
         ) : book.format === 'pdf' ? (
           <PdfPane book={book} onProgress={scheduleProgressSave} onToggleToolbar={toggleToolbar} />
@@ -362,10 +772,14 @@ export default function ReaderScreen() {
             blocks={visibleTextBlocks}
             totalBlocks={textBlocks.length}
             totalChapters={chapters.length}
-            initialBlockIndex={Math.floor(book.currentOffset)}
+            initialBlockIndex={Math.min(
+              Math.max(0, Math.floor(book.currentOffset) - textWindowStart),
+              Math.max(0, visibleTextBlocks.length - 1)
+            )}
+            scrollRequest={textScrollRequest}
             settings={settings}
             onLoadMore={() =>
-              setRenderedBlockCount((count) => Math.min(count + TEXT_BLOCK_INCREMENT, textBlocks.length))
+              setRenderedBlockCount((count) => Math.min(Math.max(count, textWindowStart) + TEXT_BLOCK_INCREMENT, textBlocks.length))
             }
             onProgress={scheduleProgressSave}
             onToggleToolbar={toggleToolbar}
@@ -386,55 +800,87 @@ export default function ReaderScreen() {
           <Text style={styles.statusText}>{time}</Text>
           <BatteryBadge value={battery} />
         </View>
-        <Text style={styles.statusText}>进度 {progress}%</Text>
+        <Text style={styles.statusText}>{progressText}</Text>
       </View>
+
+      {toolbarOpen ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="关闭工具栏"
+          onPress={closeToolbar}
+          style={styles.toolbarBackdrop}
+        />
+      ) : null}
+
+      {sheet ? (
+        <ReaderSheet
+          sheet={sheet}
+          settings={settingsRef.current}
+          progress={displayProgress}
+          chapters={book.format === 'epub' ? epubToc.map((item, index) => ({ id: item.href, title: item.label || `章节 ${index + 1}`, text: '', href: item.href })) : chapters}
+          currentChapterIndex={currentChapterIndex}
+          currentChapterHref={book.format === 'epub' ? currentEpubHref : undefined}
+          onSelectChapter={(index, href) => {
+            setCurrentChapterIndex(index);
+            if (book.format === 'epub' && href) {
+              const estimatedProgress = epubToc.length > 1 ? index / epubToc.length : 0;
+              const title = epubToc[index]?.label;
+              setCurrentEpubHref(href);
+              if (title) {
+                setEpubChapterTitle(title);
+              }
+              scheduleProgressSave(estimatedProgress, index, 0, createEpubScrollLocation(index, 0, href));
+              if (settings.mode === 'scroll') {
+                setEpubJumpRequest({ index, nonce: Date.now() });
+              }
+            } else {
+              const targetBlock = textBlocks.find((block) => block.chapterIndex === index);
+              const nextOffset = targetBlock?.blockIndex ?? 0;
+              setTextWindowStart(nextOffset);
+              setRenderedBlockCount(Math.max(INITIAL_TEXT_BLOCKS, nextOffset + TEXT_BLOCK_INCREMENT * 3));
+              setTextScrollRequest({ blockIndex: nextOffset, nonce: Date.now() });
+              const nextProgress = textBlocks.length ? nextOffset / textBlocks.length : 0;
+              scheduleProgressSave(nextProgress, index, nextOffset);
+            }
+            closeToolbar();
+          }}
+          onSettings={updateSettings}
+          onStyleChange={guardProgressForStyleChange}
+          onSeekProgress={seekToProgress}
+        />
+      ) : null}
 
       {toolbarOpen ? (
         <View style={styles.toolbar}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="目录"
-            onPress={() => setSheet(sheet === 'toc' ? null : 'toc')}
+            onPress={() => setSheet('toc')}
             style={[styles.toolbarIconButton, sheet === 'toc' && styles.toolbarIconButtonActive]}>
-            <List size={30} strokeWidth={2.2} color={readerForeground} />
+            <List size={28} strokeWidth={2.2} color={sheet === 'toc' ? ACTIVE_TOOL_COLOR : readerForeground} />
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="背景"
-            onPress={() => setSheet(sheet === 'theme' ? null : 'theme')}
+            onPress={() => setSheet('theme')}
             style={[styles.toolbarIconButton, sheet === 'theme' && styles.toolbarIconButtonActive]}>
-            <Sun size={30} strokeWidth={2.2} color={readerForeground} />
+            <Sun size={28} strokeWidth={2.2} color={sheet === 'theme' ? ACTIVE_TOOL_COLOR : readerForeground} />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="进度"
+            onPress={() => setSheet('progress')}
+            style={[styles.toolbarIconButton, sheet === 'progress' && styles.toolbarIconButtonActive]}>
+            <ProgressToolIcon color={sheet === 'progress' ? ACTIVE_TOOL_COLOR : readerForeground} />
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="字体"
-            onPress={() => setSheet(sheet === 'font' ? null : 'font')}
+            onPress={() => setSheet('font')}
             style={[styles.toolbarIconButton, sheet === 'font' && styles.toolbarIconButtonActive]}>
-            <Type size={32} strokeWidth={2.1} color={readerForeground} />
+            <Type size={30} strokeWidth={2.1} color={sheet === 'font' ? ACTIVE_TOOL_COLOR : readerForeground} />
           </Pressable>
         </View>
-      ) : null}
-
-      {sheet ? (
-        <ReaderSheet
-          sheet={sheet}
-          settings={settings}
-          chapters={book.format === 'epub' ? epubToc.map((item, index) => ({ id: item.href, title: item.label || `章节 ${index + 1}`, text: '', href: item.href })) : chapters}
-          onClose={() => setSheet(null)}
-          onSelectChapter={(index, href) => {
-            if (book.format === 'epub' && href) {
-              setEpubLocation(href);
-            } else {
-              const targetBlock = textBlocks.find((block) => block.chapterIndex === index);
-              const nextOffset = targetBlock?.blockIndex ?? 0;
-              setRenderedBlockCount(Math.max(INITIAL_TEXT_BLOCKS, nextOffset + TEXT_BLOCK_INCREMENT));
-              const nextProgress = textBlocks.length ? nextOffset / textBlocks.length : 0;
-              scheduleProgressSave(nextProgress, index, nextOffset);
-            }
-            setSheet(null);
-          }}
-          onSettings={updateSettings}
-        />
       ) : null}
 
       <ImagePreviewModal uri={previewImageUri} onClose={() => setPreviewImageUri(null)} />
@@ -447,6 +893,7 @@ function TextScrollPane({
   totalBlocks,
   totalChapters,
   initialBlockIndex,
+  scrollRequest,
   settings,
   onLoadMore,
   onProgress,
@@ -456,6 +903,7 @@ function TextScrollPane({
   totalBlocks: number;
   totalChapters: number;
   initialBlockIndex: number;
+  scrollRequest: TextScrollRequest | null;
   settings: ReadingSettings;
   onLoadMore: () => void;
   onProgress: (progress: number, chapter: number, offset: number) => void;
@@ -465,22 +913,51 @@ function TextScrollPane({
   const hasRestored = useRef(false);
   const isDragging = useRef(false);
   const touchStart = useRef({ x: 0, y: 0 });
+  const pendingScrollIndex = useRef<number | null>(null);
+  const scrollRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollRetryCount = useRef(0);
+
+  const scrollToBlockTop = useCallback((blockIndex: number) => {
+    pendingScrollIndex.current = blockIndex;
+    listRef.current?.scrollToIndex({
+      index: blockIndex,
+      animated: false,
+      viewPosition: 0,
+      viewOffset: 0,
+    });
+  }, []);
 
   useEffect(() => {
     if (hasRestored.current || initialBlockIndex <= 0 || blocks.length <= initialBlockIndex) return;
     hasRestored.current = true;
+    scrollRetryCount.current = 0;
     requestAnimationFrame(() => {
-      listRef.current?.scrollToIndex({
-        index: initialBlockIndex,
-        animated: false,
-        viewPosition: 0,
-      });
+      scrollToBlockTop(initialBlockIndex);
     });
-  }, [blocks.length, initialBlockIndex]);
+  }, [blocks.length, initialBlockIndex, scrollToBlockTop]);
+
+  useEffect(() => {
+    if (!scrollRequest) return;
+    const localIndex = blocks.findIndex((block) => block.blockIndex === scrollRequest.blockIndex);
+    if (localIndex < 0) return;
+    scrollRetryCount.current = 0;
+    requestAnimationFrame(() => {
+      scrollToBlockTop(localIndex);
+    });
+  }, [blocks, scrollRequest, scrollToBlockTop]);
+
+  useEffect(
+    () => () => {
+      if (scrollRetryTimer.current) clearTimeout(scrollRetryTimer.current);
+    },
+    []
+  );
 
   const onViewableItemsChanged = useCallback(
     ({ viewableItems }: { viewableItems: ViewToken<TextBlock>[] }) => {
-      const current = viewableItems.find((item) => item.isViewable)?.item;
+      const current = viewableItems
+        .filter((item) => item.isViewable && item.item)
+        .sort((a, b) => (a.index ?? Number.MAX_SAFE_INTEGER) - (b.index ?? Number.MAX_SAFE_INTEGER))[0]?.item;
       if (!current) return;
       const progress = totalBlocks ? current.blockIndex / totalBlocks : 0;
       onProgress(progress, current.chapterIndex, current.blockIndex);
@@ -553,10 +1030,19 @@ function TextScrollPane({
       onEndReachedThreshold={0.75}
       onEndReached={onLoadMore}
       onScrollToIndexFailed={({ index, averageItemLength }) => {
+        pendingScrollIndex.current = index;
+        if (scrollRetryCount.current >= 8) return;
+        scrollRetryCount.current += 1;
+        if (scrollRetryTimer.current) clearTimeout(scrollRetryTimer.current);
         listRef.current?.scrollToOffset({
           offset: Math.max(0, index * averageItemLength),
           animated: false,
         });
+        scrollRetryTimer.current = setTimeout(() => {
+          const targetIndex = pendingScrollIndex.current;
+          if (targetIndex === null || blocks.length <= targetIndex) return;
+          scrollToBlockTop(targetIndex);
+        }, 120);
       }}
       viewabilityConfig={{ itemVisiblePercentThreshold: 35, minimumViewTime: 220 }}
       onViewableItemsChanged={onViewableItemsChanged}
@@ -615,58 +1101,575 @@ function splitTextForVirtualList(text: string) {
   return blocks.length ? blocks : [''];
 }
 
-const EpubPane = memo(function EpubPane({
+function EpubScrollPane({
   book,
   settings,
-  location,
-  onToc,
+  initialIndex,
+  initialOffset,
+  initialProgress,
+  jumpRequest,
+  seekRequest,
   onProgress,
   onToggleToolbar,
   onImagePress,
 }: {
-  book: Book;
+  book: EpubHtmlBook;
   settings: ReadingSettings;
-  location?: string;
-  onToc: (toc: Toc) => void;
-  onProgress: (progress: number, location?: Location | null, chapterTitle?: string) => void;
+  initialIndex: number;
+  initialOffset: number;
+  initialProgress: number;
+  jumpRequest: { index: number; nonce: number } | null;
+  seekRequest: EpubSeekRequest | null;
+  onProgress: (progress: number, chapterIndex: number, href: string, chapterOffset: number) => void;
   onToggleToolbar: () => void;
   onImagePress: (uri: string) => void;
 }) {
-  const defaultTheme = useMemo(
-    () => ({
-      body: {
-        color: readerForeground,
-        background: readerBackgrounds[settings.background],
-        'font-size': `${settings.fontSize}px`,
-        'line-height': `${settings.lineHeightScale}`,
-        'padding-left': `${settings.paddingScale * 16}px`,
-        'padding-right': `${settings.paddingScale * 16}px`,
-        'font-family': settings.fontFamily === 'serif' ? 'serif' : 'sans-serif',
-      },
-    }),
-    [
-      settings.background,
-      settings.fontFamily,
-      settings.fontSize,
-      settings.lineHeightScale,
-      settings.paddingScale,
-    ]
+  const webViewRef = useRef<WebView>(null);
+  const initialIndexRef = useRef(initialIndex);
+  const initialOffsetRef = useRef(initialOffset > 0 && initialOffset <= 1 ? initialOffset : 0);
+  const initialProgressRef = useRef(initialProgress);
+  const initialSettingsRef = useRef(settings);
+  const html = useMemo(
+    () => createEpubScrollHtml(book, initialSettingsRef.current, initialIndexRef.current, initialOffsetRef.current, initialProgressRef.current),
+    [book]
+  );
+  const source = useMemo(() => ({ html }), [html]);
+
+  useEffect(() => {
+    if (!jumpRequest) return;
+    webViewRef.current?.injectJavaScript(`
+      void (function () {
+        if (window.PointReader && window.PointReader.jumpTo) {
+          window.PointReader.jumpTo(${jumpRequest.index});
+        }
+      })();
+      true;
+    `);
+  }, [jumpRequest]);
+
+  useEffect(() => {
+    if (!seekRequest) return;
+    const chapterCount = Math.max(1, book.chapters.length);
+    const absolute = clamp(seekRequest.progress, 0, 1) * chapterCount;
+    const index = Math.min(chapterCount - 1, Math.max(0, Math.floor(absolute)));
+    const offset = index === chapterCount - 1 && seekRequest.progress >= 0.999 ? 1 : clamp(absolute - index, 0, 1);
+    webViewRef.current?.injectJavaScript(`
+      void (function () {
+        if (window.PointReader && window.PointReader.jumpToOffset) {
+          window.PointReader.jumpToOffset(${index}, ${offset});
+        }
+      })();
+      true;
+    `);
+  }, [book.chapters.length, seekRequest]);
+
+  useEffect(() => {
+    webViewRef.current?.injectJavaScript(createEpubSettingsScript(settings));
+  }, [settings]);
+
+  const handleMessage = useCallback(
+    (event: WebViewMessageEvent) => {
+      try {
+        const payload = JSON.parse(event.nativeEvent.data);
+        if (payload.type === 'tap') {
+          onToggleToolbar();
+        }
+        if (payload.type === 'image' && typeof payload.src === 'string') {
+          onImagePress(payload.src);
+        }
+        if (payload.type === 'progress') {
+          onProgress(
+            clamp(Number(payload.progress), 0, 1),
+            Number(payload.index) || 0,
+            String(payload.href || ''),
+            clamp(Number(payload.offset), 0, 1)
+          );
+        }
+      } catch {
+        // Ignore malformed WebView messages.
+      }
+    },
+    [onImagePress, onProgress, onToggleToolbar]
   );
 
+  return (
+    <WebView
+      ref={webViewRef}
+      originWhitelist={['*']}
+      source={source}
+      javaScriptEnabled
+      scrollEnabled
+      showsVerticalScrollIndicator={!settings.hideScrollbar}
+      onMessage={handleMessage}
+      style={{ backgroundColor: readerBackgrounds[settings.background] }}
+    />
+  );
+}
+
+function createEpubCssVars(settings: ReadingSettings) {
+  const padding = Math.round(18 + settings.paddingScale * 18);
+  const background = readerBackgrounds[settings.background];
+  const fontFamily = settings.fontFamily === 'serif' ? 'serif' : settings.fontFamily === 'mono' ? 'monospace' : 'sans-serif';
+
+  return {
+    background,
+    fontFamily,
+    fontSize: `${settings.fontSize}px`,
+    lineHeight: String(settings.lineHeightScale),
+    padding: `${padding}px`,
+  };
+}
+
+function createEpubSettingsScript(settings: ReadingSettings) {
+  const vars = createEpubCssVars(settings);
+  return `
+    void (function () {
+      if (!window.PointReader || !window.PointReader.applySettings) return;
+      window.PointReader.applySettings(${JSON.stringify(vars)});
+    })();
+    true;
+  `;
+}
+
+function createEpubScrollHtml(book: EpubHtmlBook, settings: ReadingSettings, initialIndex: number, initialOffset: number, initialProgress: number) {
+  const safeInitialIndex = Math.max(0, Math.min(initialIndex, Math.max(0, book.chapters.length - 1)));
+  const safeInitialOffset = initialOffset > 0 && initialOffset <= 1 ? initialOffset : 0;
+  const safeInitialProgress = clamp(initialProgress, 0, 1);
+  const vars = createEpubCssVars(settings);
+
+  return `<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<style>
+${book.css}
+:root { --reader-bg: ${vars.background}; --reader-font-family: ${vars.fontFamily}; --reader-font-size: ${vars.fontSize}; --reader-line-height: ${vars.lineHeight}; --reader-padding: ${vars.padding}; }
+html, body { margin: 0; padding: 0; background: var(--reader-bg); color: ${readerForeground}; font-family: var(--reader-font-family); }
+body { -webkit-text-size-adjust: none; }
+#root { min-height: 100vh; }
+.chapter { box-sizing: border-box; padding: 24px var(--reader-padding) 40px; font-size: var(--reader-font-size); line-height: var(--reader-line-height); overflow-wrap: anywhere; }
+.chapter img, .chapter svg { max-width: 100%; height: auto; }
+.chapter p { line-height: var(--reader-line-height) !important; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+(function () {
+  var chapters = ${JSON.stringify(book.chapters)};
+  var root = document.getElementById('root');
+  var topSpacer = document.createElement('div');
+  var content = document.createElement('div');
+  var bottomSpacer = document.createElement('div');
+  var start = Math.max(0, ${safeInitialIndex} - 3);
+  var end = Math.min(chapters.length, ${safeInitialIndex} + 3);
+  var heightCache = {};
+  var averageChapterHeight = Math.max(720, Math.round((window.innerHeight || 720) * 1.2));
+  var topSpacerHeight = 0;
+  var bottomSpacerHeight = 0;
+  var isMutating = false;
+  var lastProgressAt = 0;
+  var suppressProgressUntil = Date.now() + 1200;
+  var restoreTargetIndex = ${safeInitialIndex};
+  var restoreTargetOffset = ${safeInitialOffset};
+  var restoreTargetProgress = ${safeInitialProgress};
+  var restoreLockUntil = restoreTargetProgress > 0.015 ? Date.now() + 4200 : 0;
+  var restoreLocking = false;
+  var touchStart = { x: 0, y: 0 };
+  var moved = false;
+
+  topSpacer.setAttribute('aria-hidden', 'true');
+  bottomSpacer.setAttribute('aria-hidden', 'true');
+  root.appendChild(topSpacer);
+  root.appendChild(content);
+  root.appendChild(bottomSpacer);
+
+  function post(payload) {
+    window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+  }
+
+  function createChapterSection(index) {
+    var chapter = chapters[index];
+    var section = document.createElement('section');
+    section.className = 'chapter';
+    section.id = 'chapter-' + index;
+    section.setAttribute('data-index', String(index));
+    section.setAttribute('data-href', chapter.href);
+    section.innerHTML = chapter.html;
+    return section;
+  }
+
+  function cachedHeight(index) {
+    return heightCache[index] || averageChapterHeight;
+  }
+
+  function rangeHeight(from, to) {
+    var total = 0;
+    for (var index = Math.max(0, from); index < Math.min(chapters.length, to); index += 1) {
+      total += cachedHeight(index);
+    }
+    return total;
+  }
+
+  function measureRendered() {
+    var sections = Array.prototype.slice.call(content.querySelectorAll('.chapter'));
+    var total = 0;
+    var count = 0;
+    for (var index = 0; index < sections.length; index += 1) {
+      var chapterIndex = Number(sections[index].getAttribute('data-index')) || 0;
+      var height = Math.max(1, sections[index].offsetHeight || 0);
+      heightCache[chapterIndex] = height;
+      total += height;
+      count += 1;
+    }
+    if (count > 0) {
+      averageChapterHeight = Math.max(1, Math.round(total / count));
+    }
+  }
+
+  function updateSpacers() {
+    topSpacer.style.height = Math.max(0, Math.round(topSpacerHeight)) + 'px';
+    bottomSpacer.style.height = Math.max(0, Math.round(bottomSpacerHeight)) + 'px';
+  }
+
+  function resetSpacerHeights() {
+    topSpacerHeight = rangeHeight(0, start);
+    bottomSpacerHeight = rangeHeight(end, chapters.length);
+    updateSpacers();
+  }
+
+  function captureAnchor() {
+    var section = currentChapter();
+    if (!section) {
+      return { y: window.scrollY || document.documentElement.scrollTop || 0 };
+    }
+    return {
+      index: Number(section.getAttribute('data-index')) || 0,
+      offset: (window.scrollY || document.documentElement.scrollTop || 0) - section.offsetTop,
+    };
+  }
+
+  function restoreAnchor(anchor) {
+    requestAnimationFrame(function () {
+      if (anchor && typeof anchor.index === 'number') {
+        var element = document.getElementById('chapter-' + anchor.index);
+        if (element) {
+          window.scrollTo(0, element.offsetTop + (anchor.offset || 0));
+        } else if (typeof anchor.y === 'number') {
+          window.scrollTo(0, anchor.y);
+        }
+      } else if (anchor && typeof anchor.y === 'number') {
+        window.scrollTo(0, anchor.y);
+      }
+      setTimeout(function () {
+        measureRendered();
+        updateSpacers();
+        isMutating = false;
+        sendProgress();
+        setTimeout(maybeLoadMore, 0);
+      }, 60);
+    });
+  }
+
+  function renderRange(nextStart, nextEnd, keepAnchor) {
+    var previousY = window.scrollY || document.documentElement.scrollTop || 0;
+    isMutating = true;
+    start = Math.max(0, nextStart);
+    end = Math.min(chapters.length, nextEnd);
+    content.innerHTML = '';
+    for (var index = start; index < end; index += 1) {
+      content.appendChild(createChapterSection(index));
+    }
+    measureRendered();
+    resetSpacerHeights();
+    if (keepAnchor === 'preserve') {
+      requestAnimationFrame(function () {
+        window.scrollTo(0, previousY);
+        setTimeout(function () {
+          window.scrollTo(0, previousY);
+          isMutating = false;
+          sendProgress();
+        }, 60);
+      });
+    } else {
+      isMutating = false;
+    }
+  }
+
+  function appendRange(nextEnd) {
+    var targetEnd = Math.min(chapters.length, nextEnd);
+    if (targetEnd <= end) return;
+    var anchor = captureAnchor();
+    isMutating = true;
+    var previousEnd = end;
+    for (var index = end; index < targetEnd; index += 1) {
+      content.appendChild(createChapterSection(index));
+    }
+    end = targetEnd;
+    measureRendered();
+    resetSpacerHeights();
+    recycleWindow(anchor);
+    restoreAnchor(anchor);
+  }
+
+  function prependRange(nextStart) {
+    var targetStart = Math.max(0, nextStart);
+    if (targetStart >= start) return;
+    var anchor = captureAnchor();
+    isMutating = true;
+    var previousStart = start;
+    for (var index = start - 1; index >= targetStart; index -= 1) {
+      content.insertBefore(createChapterSection(index), content.firstChild);
+    }
+    start = targetStart;
+    measureRendered();
+    resetSpacerHeights();
+    recycleWindow(anchor);
+    restoreAnchor(anchor);
+  }
+
+  function recycleWindow(anchor) {
+    var section = anchor && typeof anchor.index === 'number' ? document.getElementById('chapter-' + anchor.index) : currentChapter();
+    var currentIndex = section ? Number(section.getAttribute('data-index')) || start : start;
+    var keepStart = Math.max(0, currentIndex - 4);
+    var keepEnd = Math.min(chapters.length, currentIndex + 7);
+    if (end - start <= 14) return;
+    while (start < keepStart) {
+      var first = document.getElementById('chapter-' + start);
+      if (!first) break;
+      heightCache[start] = Math.max(1, first.offsetHeight || cachedHeight(start));
+      topSpacerHeight += heightCache[start];
+      first.remove();
+      start += 1;
+    }
+    while (end > keepEnd) {
+      var lastIndex = end - 1;
+      var last = document.getElementById('chapter-' + lastIndex);
+      if (!last) break;
+      heightCache[lastIndex] = Math.max(1, last.offsetHeight || cachedHeight(lastIndex));
+      bottomSpacerHeight += heightCache[lastIndex];
+      last.remove();
+      end -= 1;
+    }
+    updateSpacers();
+  }
+
+  function ensureAround(index) {
+    if (index < start || index >= end) {
+      renderRange(Math.max(0, index - 1), Math.min(chapters.length, index + 4));
+    }
+  }
+
+  function jumpTo(index) {
+    index = Math.max(0, Math.min(Number(index) || 0, chapters.length - 1));
+    restoreLockUntil = 0;
+    suppressProgressUntil = Date.now() + 700;
+    renderRange(Math.max(0, index - 3), Math.min(chapters.length, index + 5));
+    requestAnimationFrame(function () {
+      var element = document.getElementById('chapter-' + index);
+      if (element) element.scrollIntoView({ block: 'start' });
+      setTimeout(function () {
+        suppressProgressUntil = 0;
+        sendProgress(true);
+      }, 120);
+    });
+  }
+
+  function jumpToOffset(index, offset, keepRestoreLock) {
+    index = Math.max(0, Math.min(Number(index) || 0, chapters.length - 1));
+    offset = Math.max(0, Math.min(1, Number(offset) || 0));
+    if (!keepRestoreLock) restoreLockUntil = 0;
+    suppressProgressUntil = Date.now() + 1200;
+    renderRange(Math.max(0, index - 3), Math.min(chapters.length, index + 5));
+    function applyScroll() {
+      var element = document.getElementById('chapter-' + index);
+      if (element) {
+        var scrollableHeight = Math.max(1, element.offsetHeight - (window.innerHeight || 0));
+        window.scrollTo(0, element.offsetTop + scrollableHeight * offset);
+      }
+    }
+    requestAnimationFrame(function () {
+      applyScroll();
+      setTimeout(applyScroll, 120);
+      setTimeout(function () {
+        applyScroll();
+        suppressProgressUntil = 0;
+        sendProgress(true);
+      }, 320);
+    });
+  }
+
+  function enforceRestoreLock(currentProgress) {
+    if (restoreLocking || Date.now() > restoreLockUntil || restoreTargetProgress <= 0.015) return false;
+    if (currentProgress + 0.025 >= restoreTargetProgress) return false;
+    restoreLocking = true;
+    suppressProgressUntil = Date.now() + 900;
+    jumpToOffset(restoreTargetIndex, restoreTargetOffset, true);
+    setTimeout(function () {
+      restoreLocking = false;
+    }, 980);
+    return true;
+  }
+
+  function applySettings(vars) {
+    var anchor = captureAnchor();
+    isMutating = true;
+    var style = document.documentElement.style;
+    style.setProperty('--reader-bg', vars.background);
+    style.setProperty('--reader-font-family', vars.fontFamily);
+    style.setProperty('--reader-font-size', vars.fontSize);
+    style.setProperty('--reader-line-height', vars.lineHeight);
+    style.setProperty('--reader-padding', vars.padding);
+    document.body.style.background = vars.background;
+    restoreAnchor(anchor);
+  }
+
+  function maybeLoadMore() {
+    if (isMutating) return;
+    var y = window.scrollY || document.documentElement.scrollTop || 0;
+    var viewport = window.innerHeight || document.documentElement.clientHeight || 0;
+    var topHeight = topSpacer.offsetHeight || 0;
+    var renderedBottom = content.offsetTop + content.offsetHeight;
+    if (y < topHeight + viewport * 1.2 && start > 0) {
+      prependRange(start - 4);
+      return;
+    }
+    if (renderedBottom - (y + viewport) < viewport * 2 && end < chapters.length) {
+      appendRange(end + 4);
+    }
+  }
+
+  function currentChapter() {
+    var marker = (window.scrollY || 0) + 4;
+    var sections = Array.prototype.slice.call(document.querySelectorAll('.chapter'));
+    var current = sections[0];
+    for (var index = 0; index < sections.length; index += 1) {
+      if (sections[index].offsetTop <= marker) current = sections[index];
+      else break;
+    }
+    return current;
+  }
+
+  function sendProgress(force) {
+    if (!force && Date.now() < suppressProgressUntil) return;
+    var now = Date.now();
+    if (!force && now - lastProgressAt < 100) return;
+    lastProgressAt = now;
+    var section = currentChapter();
+    if (!section) return;
+    var index = Number(section.getAttribute('data-index')) || 0;
+    var top = section.offsetTop;
+    var height = Math.max(1, section.offsetHeight - (window.innerHeight || 0));
+    var local = Math.max(0, Math.min(1, ((window.scrollY || 0) - top) / height));
+    var progress = chapters.length ? (index + local) / chapters.length : 0;
+    if (enforceRestoreLock(progress)) return;
+    post({ type: 'progress', progress: progress, index: index, href: section.getAttribute('data-href'), offset: local });
+  }
+
+  document.addEventListener('touchstart', function (event) {
+    if (!event.touches || event.touches.length !== 1) return;
+    restoreLockUntil = 0;
+    moved = false;
+    touchStart = { x: event.touches[0].clientX, y: event.touches[0].clientY };
+  }, true);
+  document.addEventListener('touchmove', function (event) {
+    if (!event.touches || event.touches.length !== 1) return;
+    if (Math.abs(event.touches[0].clientX - touchStart.x) > 8 || Math.abs(event.touches[0].clientY - touchStart.y) > 8) moved = true;
+  }, true);
+  document.addEventListener('touchend', function (event) {
+    if (!moved) post({ type: 'tap' });
+  }, true);
+  document.addEventListener('click', function (event) {
+    var image = event.target && event.target.closest && event.target.closest('img');
+    if (image && image.src) {
+      event.preventDefault();
+      post({ type: 'image', src: image.src });
+    }
+  }, true);
+  window.addEventListener('scroll', function () {
+    maybeLoadMore();
+    sendProgress();
+  }, { passive: true });
+
+  window.PointReader = { jumpTo: jumpTo, jumpToOffset: jumpToOffset, applySettings: applySettings };
+  renderRange(start, end);
+  requestAnimationFrame(function () { jumpToOffset(${safeInitialIndex}, ${safeInitialOffset}, true); });
+})();
+</script>
+</body>
+</html>`;
+}
+
+const EpubPane = memo(function EpubPane({
+  book,
+  settings,
+  location,
+  readerKey,
+  onToc,
+  onProgress,
+  onChapterChange,
+  onToggleToolbar,
+  onImagePress,
+  onDisplayError,
+}: {
+  book: Book;
+  settings: ReadingSettings;
+  location?: string;
+  readerKey: number;
+  onToc: (toc: Toc) => void;
+  onProgress: (progress: number, location?: Location | null, chapterTitle?: string) => void;
+  onChapterChange: (title: string, href?: string) => void;
+  onToggleToolbar: () => void;
+  onImagePress: (uri: string) => void;
+  onDisplayError: () => void;
+}) {
+  const defaultTheme = useMemo(() => createReaderTheme(settings), [settings]);
+  const { goToLocation } = useReader();
+  const epubOpenedRef = useRef(false);
+  const restoringUntilRef = useRef(0);
+
+  useEffect(() => {
+    restoringUntilRef.current = location ? Date.now() + 2200 : 0;
+  }, [location, readerKey]);
+
+  useEffect(() => {
+    epubOpenedRef.current = false;
+    if (!location) return undefined;
+    const timer = setTimeout(() => {
+      if (!epubOpenedRef.current) {
+        onDisplayError();
+      }
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [location, onDisplayError, readerKey]);
+
   const handleWebViewMessage = useCallback(
-    (event: { type?: string; src?: unknown }) => {
+    (event: { type?: string; src?: unknown; progress?: unknown; location?: unknown }) => {
       if (event.type === 'point-reader:image-preview' && typeof event.src === 'string') {
         onImagePress(event.src);
       }
       if (event.type === 'point-reader:content-tap') {
         onToggleToolbar();
       }
+      if (event.type === 'point-reader:reader-error') {
+        console.warn('[PointReader EPUB]', event);
+      }
+      if (event.type === 'point-reader:reading-progress' && typeof event.progress === 'number') {
+        epubOpenedRef.current = true;
+        if (settings.mode === 'scroll') {
+          if (Date.now() < restoringUntilRef.current && isLikelyCoverLocation(event.location as Location)) {
+            return;
+          }
+          onProgress(normalizeEpubProgress(event.progress), event.location as Location);
+        }
+      }
     },
-    [onImagePress, onToggleToolbar]
+    [onImagePress, onProgress, onToggleToolbar, settings.mode]
   );
 
   return (
     <Reader
+      key={`${book.id}-${readerKey}`}
       src={book.fileUri}
       width="100%"
       height="100%"
@@ -677,9 +1680,26 @@ const EpubPane = memo(function EpubPane({
       enableSwipe={settings.mode === 'tap'}
       defaultTheme={defaultTheme}
       onNavigationLoaded={({ toc }) => onToc(toc)}
-      onLocationChange={(_, currentLocation, progress, section) =>
-        onProgress(normalizeEpubProgress(progress), currentLocation, section?.label)
-      }
+      onDisplayError={onDisplayError}
+      onReady={() => {
+        epubOpenedRef.current = true;
+        if (location) {
+          setTimeout(() => goToLocation(location), 80);
+          setTimeout(() => goToLocation(location), 420);
+        }
+      }}
+      onLocationChange={(_, currentLocation, progress, section) => {
+        epubOpenedRef.current = true;
+        if (Date.now() < restoringUntilRef.current && isLikelyCoverLocation(currentLocation)) {
+          return;
+        }
+        if (section?.label) {
+          onChapterChange(section.label, currentLocation?.start?.href || section.href);
+        }
+        if (settings.mode !== 'scroll') {
+          onProgress(normalizeEpubProgress(progress), currentLocation, section?.label);
+        }
+      }}
       injectedJavascript={EPUB_IMAGE_PREVIEW_SCRIPT}
       onWebViewMessage={handleWebViewMessage}
       onSingleTap={onToggleToolbar}
@@ -690,6 +1710,89 @@ const EpubPane = memo(function EpubPane({
 function normalizeEpubProgress(progress: number) {
   if (!Number.isFinite(progress)) return 0;
   return progress > 1 ? progress / 100 : progress;
+}
+
+function isLikelyCoverLocation(location?: Location | null) {
+  const href = normalizeEpubHref(location?.start?.href);
+  return href === 'cover.xhtml' || href === 'title.xhtml';
+}
+
+function normalizeEpubHref(href?: string | null) {
+  if (!href) return '';
+  return href.split('#')[0].replace(/^.*\/([^/]+)$/, '$1');
+}
+
+function normalizeEpubDisplayHref(href?: string | null) {
+  if (!href) return '';
+  return href.replace(/^(\.\.\/)+/, '').replace(/^\/+/, '');
+}
+
+function createEpubScrollLocation(index: number, offset: number, href: string) {
+  return `point-reader:epub-scroll:${Math.max(0, Math.round(index))}:${clamp(offset, 0, 1).toFixed(6)}:${encodeURIComponent(href)}`;
+}
+
+function parseEpubScrollLocation(location?: string | null) {
+  if (!location?.startsWith('point-reader:epub-scroll:')) return null;
+  const match = location.match(/^point-reader:epub-scroll:(\d+):([0-9.]+):(.*)$/);
+  if (!match) return null;
+  return {
+    index: Number(match[1]),
+    offset: clamp(Number(match[2]), 0, 1),
+    href: decodeURIComponent(match[3] ?? ''),
+  };
+}
+
+function progressToEpubPosition(progress: number, chapterCount: number) {
+  if (chapterCount <= 0) return { index: 0, offset: 0 };
+  const absolute = clamp(progress, 0, 1) * chapterCount;
+  const index = Math.min(chapterCount - 1, Math.max(0, Math.floor(absolute)));
+  const offset = index === chapterCount - 1 && progress >= 0.999 ? 1 : clamp(absolute - index, 0, 1);
+  return { index, offset };
+}
+
+function epubPositionProgress(index: number, offset: number, chapterCount: number) {
+  if (chapterCount <= 0) return 0;
+  return clamp((index + clamp(offset, 0, 1)) / chapterCount, 0, 1);
+}
+
+function resolveEpubRestorePosition(book: Book, epubBook: EpubHtmlBook) {
+  const chapterCount = epubBook.chapters.length;
+  if (chapterCount <= 0) return { index: 0, offset: 0 };
+
+  const progressPosition = progressToEpubPosition(book.progress, chapterCount);
+  const restoredEpubPosition = parseEpubScrollLocation(book.currentLocation);
+  const restoredHrefIndex = epubBook.chapters.findIndex((chapter) =>
+    isSameEpubHref(chapter.href, restoredEpubPosition?.href ?? book.currentLocation)
+  );
+  const locationIndex =
+    restoredEpubPosition && restoredEpubPosition.index >= 0 && restoredEpubPosition.index < chapterCount
+      ? restoredEpubPosition.index
+      : restoredHrefIndex >= 0
+        ? restoredHrefIndex
+        : Math.round(clamp(book.currentChapter, 0, Math.max(0, chapterCount - 1)));
+  const locationOffset =
+    restoredEpubPosition?.offset && restoredEpubPosition.offset > 0
+      ? restoredEpubPosition.offset
+      : book.currentOffset > 0 && book.currentOffset <= 1
+        ? book.currentOffset
+        : 0;
+  const locationProgress = epubPositionProgress(locationIndex, locationOffset, chapterCount);
+  const hasMeaningfulProgress = book.progress > 0.015;
+  const locationIsBehindProgress = locationProgress + 0.035 < book.progress;
+  const locationLooksLikeCover = locationIndex === 0 && locationOffset <= 0.01 && book.progress > 0.025;
+
+  if (hasMeaningfulProgress && (locationIsBehindProgress || locationLooksLikeCover)) {
+    return progressPosition;
+  }
+
+  return { index: locationIndex, offset: locationOffset };
+}
+
+function isSameEpubHref(first?: string | null, second?: string | null) {
+  const parsedSecond = parseEpubScrollLocation(second);
+  const normalizedFirst = normalizeEpubHref(first);
+  const normalizedSecond = normalizeEpubHref(parsedSecond?.href ?? second);
+  return Boolean(normalizedFirst && normalizedSecond && normalizedFirst === normalizedSecond);
 }
 
 function TapTextPane({
@@ -788,45 +1891,157 @@ function TapTextPane({
 function ReaderSheet({
   sheet,
   settings,
+  progress,
   chapters,
-  onClose,
+  currentChapterIndex,
+  currentChapterHref,
   onSelectChapter,
   onSettings,
+  onStyleChange,
+  onSeekProgress,
 }: {
-  sheet: 'toc' | 'theme' | 'font';
+  sheet: 'toc' | 'theme' | 'progress' | 'font';
   settings: ReadingSettings;
+  progress: number;
   chapters: ReaderChapter[];
-  onClose: () => void;
+  currentChapterIndex: number;
+  currentChapterHref?: string;
   onSelectChapter: (index: number, href?: string) => void;
   onSettings: (patch: Partial<ReadingSettings>) => void;
+  onStyleChange: () => void;
+  onSeekProgress: (progress: number) => void;
 }) {
-  const { changeFontSize, changeFontFamily, changeTheme, goToLocation } = useReader();
+  const { changeTheme, injectJavascript } = useReader();
+  const [localSettings, setLocalSettings] = useState(settings);
+  const tocListRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    setLocalSettings(settings);
+  }, [settings]);
+
+  const applyThemeSettings = (patch: Partial<ReadingSettings>) => {
+    const nextSettings = { ...localSettings, ...patch };
+    setLocalSettings(nextSettings);
+    onStyleChange();
+    onSettings(patch);
+    changeTheme(createReaderTheme(nextSettings));
+  };
+
+  const applyFontSettings = (patch: Partial<ReadingSettings>) => {
+    const nextSettings = { ...localSettings, ...patch };
+    setLocalSettings(nextSettings);
+    onStyleChange();
+    onSettings(patch);
+    changeTheme(createReaderTheme(nextSettings));
+  };
+
+  useEffect(() => {
+    if (sheet !== 'toc' || !chapters.length) return;
+    const hrefIndex = currentChapterHref
+      ? chapters.findIndex((chapter) => isSameEpubHref(chapter.href, currentChapterHref))
+      : -1;
+    const targetIndex = hrefIndex >= 0 ? hrefIndex : clamp(currentChapterIndex, 0, chapters.length - 1);
+    const timer = setTimeout(() => {
+      tocListRef.current?.scrollTo({
+        y: Math.max(0, targetIndex * TouchTarget - TouchTarget * 2),
+        animated: false,
+      });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [chapters, currentChapterHref, currentChapterIndex, sheet]);
 
   return (
     <View style={styles.sheet}>
-      <View style={styles.sheetHeader}>
-        <Text style={styles.sheetTitle}>{sheet === 'toc' ? '目录' : sheet === 'theme' ? '背景颜色' : '字体调节'}</Text>
-        <Pressable accessibilityRole="button" accessibilityLabel="关闭面板" onPress={onClose} style={styles.smallIconButton}>
-          <X size={20} color={Colors.light.text} />
-        </Pressable>
-      </View>
       {sheet === 'toc' ? (
-        <ScrollView style={styles.tocList}>
-          {chapters.map((chapter, index) => (
-            <Pressable
-              key={`${chapter.id}-${index}`}
-              accessibilityRole="button"
-              accessibilityLabel={chapter.title}
-              onPress={() => {
-                if (chapter.href) goToLocation(chapter.href);
-                onSelectChapter(index, chapter.href);
-              }}
-              style={styles.tocItem}>
-              <Text style={styles.tocTitle} numberOfLines={2}>
-                {chapter.title}
-              </Text>
-            </Pressable>
-          ))}
+        <ScrollView ref={tocListRef} style={styles.tocList}>
+          {chapters.map((chapter, index) => {
+            const isCurrent = currentChapterHref
+              ? isSameEpubHref(chapter.href, currentChapterHref)
+              : index === currentChapterIndex;
+            return (
+              <Pressable
+                key={`${chapter.id}-${index}`}
+                accessibilityRole="button"
+                accessibilityLabel={chapter.title}
+                accessibilityState={{ selected: isCurrent }}
+                onPress={() => {
+                  const targetHref = normalizeEpubDisplayHref(chapter.href);
+                  if (targetHref) {
+                    injectJavascript(`
+                      void (function () {
+                        var target = ${JSON.stringify(targetHref)};
+                        if (typeof rendition === 'undefined' || !rendition) return;
+                        window.__pointReaderJumpGeneration = (window.__pointReaderJumpGeneration || 0) + 1;
+                        var jumpId = window.__pointReaderJumpGeneration;
+                        window.__pointReaderLastUserScrollAt = 0;
+                        window.__pointReaderSuppressProgressUntil = Date.now() + 3500;
+                        function reportJumpProgress() {
+                          window.__pointReaderSuppressProgressUntil = 0;
+                          if (typeof window.__pointReaderScheduleReadingProgress === 'function') {
+                            window.__pointReaderScheduleReadingProgress();
+                            setTimeout(window.__pointReaderScheduleReadingProgress, 180);
+                          }
+                        }
+                        function waitForStableLayoutThenRedisplay(attempt, lastHeight, lastViewCount, stableCount) {
+                          if (window.__pointReaderJumpGeneration !== jumpId) return;
+                          if (Date.now() - (window.__pointReaderLastUserScrollAt || 0) < 250) {
+                            window.__pointReaderSuppressProgressUntil = 0;
+                            return;
+                          }
+                          var manager = rendition.manager || {};
+                          var container = manager.container;
+                          var height = container ? container.scrollHeight : 0;
+                          var viewCount = manager.views && manager.views.all ? manager.views.all().length : 0;
+                          var nextStableCount = height === lastHeight && viewCount === lastViewCount ? stableCount + 1 : 0;
+                          if (nextStableCount >= 3 || attempt >= 18) {
+                            Promise.resolve(rendition.display(target))
+                              .then(function () {
+                                setTimeout(reportJumpProgress, 220);
+                              })
+                              .catch(function () {
+                                rendition.display('../' + target).then(function () {
+                                  setTimeout(reportJumpProgress, 220);
+                                });
+                              });
+                            return;
+                          }
+                          setTimeout(function () {
+                            waitForStableLayoutThenRedisplay(attempt + 1, height, viewCount, nextStableCount);
+                          }, 120);
+                        }
+                        Promise.resolve(rendition.display(target))
+                          .then(function () {
+                            setTimeout(function () {
+                              waitForStableLayoutThenRedisplay(0, -1, -1, 0);
+                            }, 240);
+                          })
+                          .catch(function () {
+                            rendition.display('../' + target)
+                              .then(function () {
+                                setTimeout(function () {
+                                  waitForStableLayoutThenRedisplay(0, -1, -1, 0);
+                                }, 240);
+                              })
+                              .catch(function (error) {
+                                window.__pointReaderSuppressProgressUntil = 0;
+                                if (typeof window.__pointReaderSendReaderError === 'function') {
+                                  window.__pointReaderSendReaderError(error && (error.message || error));
+                                }
+                              });
+                          });
+                      })();
+                      true;
+                    `);
+                  }
+                  onSelectChapter(index, targetHref || chapter.href);
+                }}
+                style={[styles.tocItem, isCurrent && styles.tocItemCurrent]}>
+                <Text style={[styles.tocTitle, isCurrent && styles.tocTitleCurrent]} numberOfLines={2}>
+                  {chapter.title}
+                </Text>
+              </Pressable>
+            );
+          })}
         </ScrollView>
       ) : null}
       {sheet === 'theme' ? (
@@ -837,104 +2052,453 @@ function ReaderSheet({
               accessibilityRole="button"
               accessibilityLabel={`背景 ${name}`}
               onPress={() => {
-                onSettings({ background: name });
-                changeTheme({ body: { background: readerBackgrounds[name], color: readerForeground } });
+                applyThemeSettings({ background: name });
               }}
               style={[
                 styles.swatch,
                 { backgroundColor: readerBackgrounds[name] },
-                settings.background === name && styles.swatchSelected,
+                localSettings.background === name && styles.swatchSelected,
               ]}
             />
           ))}
         </View>
       ) : null}
+      {sheet === 'progress' ? (
+        <ProgressPanel
+          progress={progress}
+          onSeek={onSeekProgress}
+          onPreviousChapter={() => {
+            const nextIndex = Math.max(0, currentChapterIndex - 1);
+            const nextProgress = chapters.length ? nextIndex / chapters.length : 0;
+            onSeekProgress(nextProgress);
+          }}
+          onNextChapter={() => {
+            const nextIndex = Math.min(Math.max(0, chapters.length - 1), currentChapterIndex + 1);
+            const nextProgress = chapters.length ? nextIndex / chapters.length : 1;
+            onSeekProgress(nextProgress);
+          }}
+        />
+      ) : null}
       {sheet === 'font' ? (
         <View style={styles.fontPanel}>
-          <Text style={styles.controlLabel}>字体</Text>
-          <View style={styles.segmented}>
-            {(['system', 'serif', 'mono'] as ReadingSettings['fontFamily'][]).map((font) => (
-              <InkButton
-                key={font}
-                label={font === 'system' ? '系统' : font === 'serif' ? '衬线' : '等宽'}
-                selected={settings.fontFamily === font}
-                onPress={() => {
-                  onSettings({ fontFamily: font });
-                  changeFontFamily(font === 'serif' ? 'serif' : font === 'mono' ? 'monospace' : 'sans-serif');
-                }}
-                style={styles.segmentButton}
-              />
-            ))}
-          </View>
-          <SliderControl
-            label={`文字大小 ${settings.fontSize}`}
-            value={settings.fontSize}
+          <ReaderMetricControl
+            value={localSettings.fontSize}
             min={16}
             max={32}
             step={1}
-            onValue={(value) => {
-              onSettings({ fontSize: value });
-              changeFontSize(`${value}px`);
-            }}
+            leftLabel="A"
+            rightLabel="A"
+            valueLabel={`${localSettings.fontSize}`}
+            accessibilityLabel="文字大小"
+            onValue={(value) => applyFontSettings({ fontSize: value })}
           />
-          <SliderControl
-            label="文字内边距"
-            value={settings.paddingScale}
-            min={0.5}
-            max={1.8}
-            step={0.1}
-            onValue={(value) => onSettings({ paddingScale: value })}
-          />
-          <SliderControl
-            label="行高"
-            value={settings.lineHeightScale}
-            min={1.2}
-            max={1.9}
-            step={0.05}
-            onValue={(value) => onSettings({ lineHeightScale: value })}
-          />
+          <View style={styles.metricGrid}>
+            <ReaderMetricControl
+              value={localSettings.paddingScale}
+              min={0.5}
+              max={1.8}
+              step={0.1}
+              leftLabel="小"
+              rightLabel="大"
+              valueLabel="边距"
+              icon={SquareDashed}
+              compact
+              accessibilityLabel="文字内边距"
+              onValue={(value) => applyFontSettings({ paddingScale: value })}
+            />
+            <ReaderMetricControl
+              value={localSettings.lineHeightScale}
+              min={1.2}
+              max={1.9}
+              step={0.05}
+              leftLabel="小"
+              rightLabel="大"
+              valueLabel="行高"
+              icon={ListChevronsUpDown}
+              compact
+              accessibilityLabel="行高"
+              onValue={(value) => applyFontSettings({ lineHeightScale: value })}
+            />
+          </View>
         </View>
       ) : null}
     </View>
   );
 }
 
-function SliderControl({
-  label,
+function ProgressPanel({
+  progress,
+  onSeek,
+  onPreviousChapter,
+  onNextChapter,
+}: {
+  progress: number;
+  onSeek: (progress: number) => void;
+  onPreviousChapter: () => void;
+  onNextChapter: () => void;
+}) {
+  const undoProgress = useRef<number | null>(null);
+  const redoProgress = useRef<number | null>(null);
+
+  const commitSeek = useCallback(
+    (nextProgress: number) => {
+      undoProgress.current = progress;
+      redoProgress.current = null;
+      onSeek(clamp(nextProgress, 0, 1));
+    },
+    [onSeek, progress]
+  );
+
+  const seekBy = useCallback(
+    (delta: number) => {
+      commitSeek(progress + delta);
+    },
+    [commitSeek, progress]
+  );
+
+  const undo = useCallback(() => {
+    if (undoProgress.current === null) return;
+    redoProgress.current = progress;
+    const target = undoProgress.current;
+    undoProgress.current = null;
+    onSeek(target);
+  }, [onSeek, progress]);
+
+  const redo = useCallback(() => {
+    if (redoProgress.current === null) return;
+    undoProgress.current = progress;
+    const target = redoProgress.current;
+    redoProgress.current = null;
+    onSeek(target);
+  }, [onSeek, progress]);
+
+  const jumpChapter = useCallback(
+    (direction: -1 | 1) => {
+      undoProgress.current = progress;
+      redoProgress.current = null;
+      if (direction < 0) onPreviousChapter();
+      else onNextChapter();
+    },
+    [onNextChapter, onPreviousChapter, progress]
+  );
+
+  return (
+    <View style={styles.progressPanel}>
+      <ReaderProgressControl value={progress} onValue={commitSeek} />
+      <View style={styles.progressActions}>
+        <Pressable accessibilityRole="button" accessibilityLabel="上一章" onPress={() => jumpChapter(-1)} style={styles.progressActionButton}>
+          <ChevronsLeft size={28} color={readerForeground} strokeWidth={2.6} />
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="后退一点" onPress={() => seekBy(-0.01)} style={styles.progressActionButton}>
+          <ChevronLeft size={30} color={readerForeground} strokeWidth={2.6} />
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="撤销跳转" onPress={undo} style={styles.progressActionButton}>
+          <RotateCcw size={30} color="rgba(28,25,23,0.48)" strokeWidth={2.4} />
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="重做跳转" onPress={redo} style={styles.progressActionButton}>
+          <RotateCw size={30} color={readerForeground} strokeWidth={2.4} />
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="前进一点" onPress={() => seekBy(0.01)} style={styles.progressActionButton}>
+          <ChevronRight size={30} color={readerForeground} strokeWidth={2.6} />
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="下一章" onPress={() => jumpChapter(1)} style={styles.progressActionButton}>
+          <ChevronsRight size={28} color={readerForeground} strokeWidth={2.6} />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function ProgressToolIcon({ color }: { color: string }) {
+  return (
+    <View style={styles.progressToolIcon} accessibilityElementsHidden>
+      <View style={[styles.progressToolIconLine, { backgroundColor: color }]} />
+      <View style={[styles.progressToolIconKnob, { borderColor: color }]} />
+    </View>
+  );
+}
+
+function ReaderProgressControl({ value, onValue }: { value: number; onValue: (value: number) => void }) {
+  const [trackWidth, setTrackWidth] = useState(0);
+  const [localValue, setLocalValue] = useState(value);
+  const localValueRef = useRef(value);
+  const dragging = useRef(false);
+  const controlRef = useRef<View>(null);
+  const controlPageX = useRef(0);
+  const thumbWidth = 56;
+  const travelWidth = Math.max(1, trackWidth - thumbWidth);
+  const thumbLeft = clamp(localValue, 0, 1) * travelWidth;
+
+  useEffect(() => {
+    if (dragging.current) return;
+    localValueRef.current = value;
+    setLocalValue(value);
+  }, [value]);
+
+  const updateValueFromTrackX = useCallback(
+    (x: number) => {
+      if (!trackWidth) return;
+      const ratio = clamp((x - thumbWidth / 2) / travelWidth, 0, 1);
+      localValueRef.current = ratio;
+      setLocalValue(ratio);
+    },
+    [thumbWidth, trackWidth, travelWidth]
+  );
+
+  const updateControlPageX = useCallback(() => {
+    controlRef.current?.measureInWindow((x) => {
+      controlPageX.current = x;
+    });
+  }, []);
+
+  const updateValueFromPageX = useCallback(
+    (pageX: number) => {
+      updateValueFromTrackX(pageX - controlPageX.current);
+    },
+    [updateValueFromTrackX]
+  );
+
+  const commit = useCallback(() => {
+    onValue(clamp(localValueRef.current, 0, 1));
+  }, [onValue]);
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponderCapture: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponderCapture: () => true,
+        onShouldBlockNativeResponder: () => true,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderGrant: (event) => {
+          dragging.current = true;
+          controlRef.current?.measureInWindow((x) => {
+            controlPageX.current = x;
+            updateValueFromPageX(event.nativeEvent.pageX);
+          });
+        },
+        onPanResponderMove: (_, gestureState) => {
+          updateValueFromPageX(gestureState.moveX);
+        },
+        onPanResponderRelease: () => {
+          dragging.current = false;
+          commit();
+        },
+        onPanResponderTerminate: () => {
+          dragging.current = false;
+          commit();
+        },
+      }),
+    [commit, updateValueFromPageX]
+  );
+
+  return (
+    <View
+      ref={controlRef}
+      accessibilityRole="adjustable"
+      accessibilityLabel="阅读进度"
+      accessibilityValue={{ text: `${Math.round(localValue * 100)}%` }}
+      onAccessibilityAction={(event) => {
+        if (event.nativeEvent.actionName === 'increment') onValue(clamp(value + 0.01, 0, 1));
+        if (event.nativeEvent.actionName === 'decrement') onValue(clamp(value - 0.01, 0, 1));
+      }}
+      accessibilityActions={[
+        { name: 'increment', label: '前进' },
+        { name: 'decrement', label: '后退' },
+      ]}
+      onLayout={(event) => {
+        setTrackWidth(event.nativeEvent.layout.width);
+        updateControlPageX();
+      }}
+      style={styles.progressTrack}
+      {...panResponder.panHandlers}>
+      <View pointerEvents="none" style={[styles.progressTrackFill, { width: trackWidth ? thumbLeft + thumbWidth / 2 : 0 }]} />
+      <View pointerEvents="none" style={[styles.progressThumb, trackWidth > 0 && { left: thumbLeft, width: thumbWidth }]}>
+        <Text style={styles.progressThumbText}>{`${Math.round(localValue * 100)}%`}</Text>
+      </View>
+    </View>
+  );
+}
+
+function ReaderMetricControl({
   value,
   min,
   max,
   step,
+  leftLabel,
+  rightLabel,
+  valueLabel,
+  icon: Icon,
+  accessibilityLabel,
+  compact,
   onValue,
 }: {
-  label: string;
   value: number;
   min: number;
   max: number;
   step: number;
+  leftLabel: string;
+  rightLabel: string;
+  valueLabel: string;
+  icon?: LucideIcon;
+  accessibilityLabel: string;
+  compact?: boolean;
   onValue: (value: number) => void;
 }) {
+  const [trackWidth, setTrackWidth] = useState(0);
+  const [localValue, setLocalValue] = useState(value);
+  const localValueRef = useRef(value);
+  const dragging = useRef(false);
+  const controlRef = useRef<View>(null);
+  const controlPageX = useRef(0);
+  const thumbWidth = compact ? 48 : 64;
+  const travelWidth = Math.max(1, trackWidth - thumbWidth);
+  const progress = trackWidth ? (localValue - min) / (max - min) : 0;
+  const thumbLeft = clamp(progress, 0, 1) * travelWidth;
+
+  useEffect(() => {
+    if (dragging.current) return;
+    localValueRef.current = value;
+    setLocalValue(value);
+  }, [value]);
+
+  const normalizeValue = useCallback(
+    (rawValue: number) => {
+      const multiplier = Math.round(1 / step);
+      return clamp(Math.round(rawValue * multiplier) / multiplier, min, max);
+    },
+    [max, min, step]
+  );
+
+  const setDraftValue = useCallback((nextValue: number) => {
+    const normalized = normalizeValue(nextValue);
+    localValueRef.current = normalized;
+    setLocalValue(normalized);
+  }, [normalizeValue]);
+
+  const commitValue = useCallback((nextValue = localValueRef.current) => {
+    const normalized = normalizeValue(nextValue);
+    localValueRef.current = normalized;
+    setLocalValue(normalized);
+    onValue(normalized);
+  }, [normalizeValue, onValue]);
+
+  const updateValue = useCallback((direction: -1 | 1) => {
+    const multiplier = Math.round(1 / step);
+    const next = Math.round((localValueRef.current + direction * step) * multiplier) / multiplier;
+    commitValue(clamp(next, min, max));
+  }, [commitValue, max, min, step]);
+
+  const updateValueFromTrackX = useCallback(
+    (x: number) => {
+      if (!trackWidth) return;
+      const ratio = clamp((x - thumbWidth / 2) / travelWidth, 0, 1);
+      setDraftValue(min + ratio * (max - min));
+    },
+    [max, min, setDraftValue, thumbWidth, trackWidth, travelWidth]
+  );
+
+  const updateControlPageX = useCallback(() => {
+    controlRef.current?.measureInWindow((x) => {
+      controlPageX.current = x;
+    });
+  }, []);
+
+  const updateValueFromPageX = useCallback(
+    (pageX: number) => {
+      updateValueFromTrackX(pageX - controlPageX.current);
+    },
+    [updateValueFromTrackX]
+  );
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponderCapture: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponderCapture: () => true,
+        onShouldBlockNativeResponder: () => true,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderGrant: (event) => {
+          dragging.current = true;
+          controlRef.current?.measureInWindow((x) => {
+            controlPageX.current = x;
+            updateValueFromPageX(event.nativeEvent.pageX);
+          });
+        },
+        onPanResponderMove: (_, gestureState) => {
+          if (!trackWidth) return;
+          updateValueFromPageX(gestureState.moveX);
+        },
+        onPanResponderRelease: () => {
+          dragging.current = false;
+          commitValue();
+        },
+        onPanResponderTerminate: () => {
+          dragging.current = false;
+          commitValue();
+        },
+      }),
+    [commitValue, trackWidth, updateValueFromPageX]
+  );
+
   return (
-    <View style={styles.sliderControl}>
-      <Text style={styles.controlLabel}>{label}</Text>
-      <Slider
-        minimumValue={min}
-        maximumValue={max}
-        step={step}
-        value={value}
-        minimumTrackTintColor={Colors.light.text}
-        maximumTrackTintColor={Colors.light.border}
-        thumbTintColor={Colors.light.text}
-        onSlidingComplete={onValue}
-      />
+    <View
+      ref={controlRef}
+      style={[styles.metricControl, compact && styles.metricControlCompact]}
+      onLayout={(event) => {
+        setTrackWidth(event.nativeEvent.layout.width);
+        updateControlPageX();
+      }}
+      {...panResponder.panHandlers}>
+      <View pointerEvents="none" style={styles.metricTrackLabels}>
+        <Text style={[styles.metricSideText, compact && styles.metricSideTextCompact]}>{leftLabel}</Text>
+        <Text style={[styles.metricSideText, styles.metricSideTextLarge, compact && styles.metricSideTextCompact]}>{rightLabel}</Text>
+      </View>
+      <View
+        accessibilityRole="adjustable"
+        accessibilityLabel={accessibilityLabel}
+        accessibilityValue={{ text: valueLabel }}
+        onAccessibilityAction={(event) => {
+          if (event.nativeEvent.actionName === 'increment') updateValue(1);
+          if (event.nativeEvent.actionName === 'decrement') updateValue(-1);
+        }}
+        accessibilityActions={[
+          { name: 'increment', label: '增大' },
+          { name: 'decrement', label: '减小' },
+        ]}
+        style={[
+          styles.metricThumb,
+          compact && styles.metricThumbCompact,
+          trackWidth > 0 && { left: thumbLeft, width: thumbWidth },
+        ]}>
+        {Icon ? <Icon size={compact ? 17 : 19} color={Colors.light.text} strokeWidth={2.4} /> : null}
+        {!compact ? <Text style={styles.metricThumbText}>{String(Math.round(localValue))}</Text> : null}
+      </View>
     </View>
   );
 }
 
 function BatteryBadge({ value }: { value: number | null }) {
+  const normalizedValue = Math.round(clamp(value ?? 0, 0, 100));
+  const fillWidth = Math.round((normalizedValue / 100) * BATTERY_BODY_WIDTH);
+  const batteryText = String(normalizedValue);
+
   return (
     <View style={styles.batteryBadge} accessibilityLabel={`电量 ${value === null ? '未知' : `${value}%`}`}>
-      <Text style={styles.batteryBadgeText}>{value === null ? '--' : value}</Text>
+      <View style={styles.batteryBody}>
+        <View style={styles.batteryTextLayer}>
+          <Text style={styles.batteryBadgeText}>{batteryText}</Text>
+        </View>
+        <View style={[styles.batteryFillClip, { width: fillWidth }]}>
+          <View style={styles.batteryFill} />
+          <View style={styles.batteryTextLayer}>
+            <Text style={[styles.batteryBadgeText, styles.batteryBadgeTextFilled]}>{batteryText}</Text>
+          </View>
+        </View>
+      </View>
       <View style={styles.batteryCap} />
     </View>
   );
@@ -1082,24 +2646,30 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   readerTop: {
-    minHeight: 52,
+    position: 'relative',
+    minHeight: 46,
     paddingHorizontal: Spacing.three,
     flexDirection: 'row',
     alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(28,25,23,0.16)',
+    justifyContent: 'center',
+    zIndex: 40,
   },
   chapterTitle: {
     flex: 1,
     fontSize: 15,
-    fontWeight: '900',
-    color: readerForeground,
+    lineHeight: 20,
+    fontWeight: '400',
+    color: 'rgba(28,25,23,0.62)',
   },
-  closeButton: {
+  readerCloseButton: {
     width: TouchTarget,
     height: TouchTarget,
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: -Spacing.two,
+  },
+  readerCloseButtonHidden: {
+    opacity: 0,
   },
   readerBody: {
     flex: 1,
@@ -1138,10 +2708,8 @@ const styles = StyleSheet.create({
     color: readerForeground,
   },
   statusBar: {
-    minHeight: 38,
+    minHeight: 28,
     paddingHorizontal: Spacing.three,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(28,25,23,0.16)',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -1149,52 +2717,94 @@ const styles = StyleSheet.create({
   statusLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.two,
+    gap: Spacing.one,
   },
   statusText: {
     fontSize: 13,
-    fontWeight: '800',
-    color: readerForeground,
+    lineHeight: 16,
+    fontWeight: '400',
+    color: 'rgba(28,25,23,0.62)',
   },
   batteryBadge: {
     position: 'relative',
-    minWidth: 34,
-    height: 18,
-    paddingHorizontal: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  batteryBody: {
+    position: 'relative',
+    width: BATTERY_BODY_WIDTH,
+    height: BATTERY_BODY_HEIGHT,
     borderWidth: 1.5,
-    borderColor: readerForeground,
+    borderColor: 'rgba(28,25,23,0.62)',
+    borderRadius: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  batteryFillClip: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    overflow: 'hidden',
+  },
+  batteryFill: {
+    width: BATTERY_BODY_WIDTH,
+    height: BATTERY_BODY_HEIGHT,
+    backgroundColor: 'rgba(28,25,23,0.82)',
+  },
+  batteryTextLayer: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: BATTERY_BODY_WIDTH,
+    height: BATTERY_BODY_HEIGHT,
     alignItems: 'center',
     justifyContent: 'center',
   },
   batteryBadgeText: {
-    fontSize: 10,
-    lineHeight: 12,
-    fontWeight: '900',
-    color: readerForeground,
+    fontSize: 9,
+    lineHeight: 9,
+    fontWeight: '700',
+    textAlign: 'center',
+    includeFontPadding: false,
+    color: 'rgba(28,25,23,0.82)',
+  },
+  batteryBadgeTextFilled: {
+    color: Colors.light.surface,
   },
   batteryCap: {
-    position: 'absolute',
-    right: -4,
     width: 3,
-    height: 8,
+    height: 7,
     borderTopWidth: 1.5,
     borderRightWidth: 1.5,
     borderBottomWidth: 1.5,
-    borderColor: readerForeground,
+    borderColor: 'rgba(28,25,23,0.62)',
+  },
+  toolbarBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: READER_TOOLBAR_HEIGHT,
+    zIndex: 8,
+    backgroundColor: 'transparent',
   },
   toolbar: {
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 38,
-    minHeight: 68,
+    bottom: 0,
+    minHeight: READER_TOOLBAR_HEIGHT,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    paddingHorizontal: Spacing.five,
+    paddingHorizontal: Spacing.four,
+    paddingBottom: Spacing.one,
     borderTopWidth: 1,
     borderTopColor: 'rgba(28,25,23,0.16)',
     backgroundColor: Colors.light.surface,
+    zIndex: 30,
   },
   toolbarIconButton: {
     width: 52,
@@ -1203,35 +2813,40 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   toolbarIconButtonActive: {
-    backgroundColor: Colors.light.backgroundElement,
+    backgroundColor: 'transparent',
+  },
+  progressToolIcon: {
+    position: 'relative',
+    width: 31,
+    height: 31,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  progressToolIconLine: {
+    width: 30,
+    height: 3,
+    borderRadius: 2,
+  },
+  progressToolIconKnob: {
+    position: 'absolute',
+    width: 13,
+    height: 13,
+    borderRadius: 7,
+    borderWidth: 3,
+    backgroundColor: Colors.light.surface,
   },
   sheet: {
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 0,
-    maxHeight: '58%',
-    borderTopWidth: 1,
-    borderTopColor: Colors.light.text,
+    bottom: READER_TOOLBAR_HEIGHT,
+    maxHeight: '42%',
     backgroundColor: Colors.light.surface,
-    padding: Spacing.three,
-    gap: Spacing.three,
-  },
-  sheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  sheetTitle: {
-    fontSize: 19,
-    fontWeight: '900',
-    color: Colors.light.text,
-  },
-  smallIconButton: {
-    width: TouchTarget,
-    height: TouchTarget,
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.three,
+    paddingBottom: Spacing.four,
+    gap: Spacing.two,
+    zIndex: 20,
   },
   tocList: {
     maxHeight: 320,
@@ -1239,13 +2854,20 @@ const styles = StyleSheet.create({
   tocItem: {
     minHeight: TouchTarget,
     justifyContent: 'center',
+    paddingHorizontal: Spacing.two,
     borderBottomWidth: 1,
     borderBottomColor: Colors.light.backgroundElement,
+  },
+  tocItemCurrent: {
+    backgroundColor: Colors.light.backgroundElement,
   },
   tocTitle: {
     fontSize: 16,
     lineHeight: 22,
     color: Colors.light.text,
+  },
+  tocTitleCurrent: {
+    fontWeight: '700',
   },
   swatches: {
     flexDirection: 'row',
@@ -1262,23 +2884,132 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: Colors.light.text,
   },
-  fontPanel: {
-    gap: Spacing.three,
+  progressPanel: {
+    gap: Spacing.four,
+    paddingVertical: Spacing.two,
   },
-  segmented: {
-    flexDirection: 'row',
-    gap: Spacing.two,
+  progressTrack: {
+    position: 'relative',
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: Colors.light.backgroundElement,
+    overflow: 'visible',
   },
-  segmentButton: {
-    flex: 1,
+  progressTrackFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: 25,
+    backgroundColor: 'rgba(28,25,23,0.08)',
   },
-  sliderControl: {
-    gap: Spacing.one,
+  progressThumb: {
+    position: 'absolute',
+    top: -3,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Colors.light.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: Colors.light.text,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
   },
-  controlLabel: {
-    fontSize: 14,
-    fontWeight: '900',
+  progressThumbText: {
+    fontSize: 15,
+    lineHeight: 18,
+    fontWeight: '500',
     color: Colors.light.text,
+  },
+  progressActions: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  progressActionButton: {
+    width: 48,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fontPanel: {
+    gap: Spacing.four,
+  },
+  metricGrid: {
+    flexDirection: 'row',
+    gap: Spacing.four,
+  },
+  metricControl: {
+    position: 'relative',
+    minHeight: 48,
+    borderRadius: 24,
+    backgroundColor: Colors.light.backgroundElement,
+    flexDirection: 'row',
+    alignItems: 'center',
+    overflow: 'visible',
+  },
+  metricControlCompact: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 23,
+  },
+  metricTrackLabels: {
+    ...StyleSheet.absoluteFillObject,
+    paddingHorizontal: Spacing.three,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  metricSideText: {
+    fontSize: 21,
+    lineHeight: 25,
+    fontWeight: '400',
+    color: Colors.light.text,
+  },
+  metricSideTextLarge: {
+    fontSize: 27,
+    lineHeight: 31,
+  },
+  metricSideTextCompact: {
+    fontSize: 18,
+    lineHeight: 22,
+    fontWeight: '400',
+  },
+  metricThumb: {
+    position: 'absolute',
+    top: 0,
+    minWidth: 64,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: Colors.light.backgroundElement,
+    backgroundColor: Colors.light.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: Spacing.one,
+    shadowColor: Colors.light.text,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  metricThumbCompact: {
+    minWidth: 48,
+    height: 46,
+    borderRadius: 23,
+  },
+  metricThumbText: {
+    fontSize: 17,
+    lineHeight: 21,
+    fontWeight: '500',
+    color: Colors.light.text,
+  },
+  metricPressed: {
+    opacity: 0.62,
   },
   tapPane: {
     flex: 1,

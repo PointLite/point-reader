@@ -8,6 +8,19 @@ type EpubMetadata = {
   coverUri?: string | null;
 };
 
+export type EpubDetailMetadata = EpubMetadata & {
+  publisher?: string;
+  publishedAt?: string;
+  updatedAt?: string;
+  createdAt?: string;
+  language?: string;
+  subject?: string;
+  identifier?: string;
+  description?: string;
+  series?: string;
+  seriesIndex?: string;
+};
+
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '',
@@ -16,6 +29,15 @@ const parser = new XMLParser({
 const COVER_DIR = `${FileSystem.documentDirectory ?? ''}covers/`;
 
 export async function extractEpubMetadata(fileUri: string, bookId: string): Promise<EpubMetadata> {
+  const metadata = await extractEpubDetailMetadata(fileUri, bookId);
+  return {
+    title: metadata.title,
+    author: metadata.author,
+    coverUri: metadata.coverUri,
+  };
+}
+
+export async function extractEpubDetailMetadata(fileUri: string, bookId?: string): Promise<EpubDetailMetadata> {
   const bytes = await readFileAsBytes(fileUri);
   const zip = unzipSync(bytes);
   const container = readZipText(zip, 'META-INF/container.xml');
@@ -30,14 +52,32 @@ export async function extractEpubMetadata(fileUri: string, bookId: string): Prom
   const manifestItems = toArray(pkg?.manifest?.item);
   const title = textValue(metadata['dc:title']);
   const author = textValue(metadata['dc:creator']);
+  const publisher = textValue(metadata['dc:publisher']);
+  const language = textValue(metadata['dc:language']);
+  const subject = textList(metadata['dc:subject']).join('、') || undefined;
+  const identifier = textValue(metadata['dc:identifier']);
+  const description = cleanDescription(textValue(metadata['dc:description']));
+  const dates = extractDates(metadata);
+  const series = extractMetaContent(metadata, ['calibre:series', 'belongs-to-collection']);
+  const seriesIndex = extractMetaContent(metadata, ['calibre:series_index', 'group-position']);
   const coverItem = findCoverItem(metadata, manifestItems);
   const coverPath = coverItem?.href ? normalizeZipPath(`${opfDir}${coverItem.href}`) : null;
   const coverBytes = coverPath ? zip[coverPath] : undefined;
-  const coverUri = coverBytes && coverPath ? await writeCoverImage(coverBytes, bookId, coverPath) : null;
+  const coverUri = coverBytes && coverPath && bookId ? await writeCoverImage(coverBytes, bookId, coverPath) : null;
 
   return {
     title,
     author,
+    publisher,
+    publishedAt: dates.publishedAt,
+    updatedAt: dates.updatedAt,
+    createdAt: dates.createdAt,
+    language,
+    subject,
+    identifier,
+    description,
+    series,
+    seriesIndex,
     coverUri,
   };
 }
@@ -77,6 +117,54 @@ function textValue(value: unknown) {
     return text?.trim();
   }
   return undefined;
+}
+
+function textList(value: unknown) {
+  return toArray(value)
+    .map(textValue)
+    .filter((item): item is string => Boolean(item));
+}
+
+function extractDates(metadata: any) {
+  const dateItems = toArray<any>(metadata['dc:date']);
+  const allDates = dateItems.map((item) => ({
+    value: textValue(item),
+    event: item?.event ?? item?.['opf:event'],
+  }));
+  const publishedAt =
+    allDates.find((item) => item.event === 'publication')?.value ??
+    allDates.find((item) => item.value)?.value;
+  const createdAt = allDates.find((item) => item.event === 'creation')?.value;
+  const metaItems = toArray<any>(metadata?.meta);
+  const updatedAt =
+    metaItems.find((item) => item.property === 'dcterms:modified')?.['#text'] ??
+    metaItems.find((item) => item.name === 'calibre:timestamp')?.content;
+
+  return {
+    publishedAt,
+    updatedAt,
+    createdAt,
+  };
+}
+
+function extractMetaContent(metadata: any, names: string[]) {
+  const metaItems = toArray<any>(metadata?.meta);
+  for (const name of names) {
+    const byName = metaItems.find((item) => item.name === name && item.content);
+    if (byName?.content) return String(byName.content).trim();
+    const byProperty = metaItems.find((item) => item.property === name && (item['#text'] || item.content));
+    const value = byProperty?.['#text'] ?? byProperty?.content;
+    if (value) return String(value).trim();
+  }
+  return undefined;
+}
+
+function cleanDescription(value?: string) {
+  if (!value) return undefined;
+  return value
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function toArray<T>(value: T | T[] | undefined | null): T[] {

@@ -17,6 +17,7 @@ type BookCardProps = {
 function BookCardBase({ book, selected, selectionMode, width, onPress, onLongPress }: BookCardProps) {
   const progress = Math.round(book.progress * 100);
   const isRead = progress >= 99;
+  const titleStyle = getTitleTextStyle(book.title);
 
   return (
     <Pressable
@@ -46,7 +47,10 @@ function BookCardBase({ book, selected, selectionMode, width, onPress, onLongPre
         {selectionMode && !selected ? <View style={styles.checkbox} /> : null}
       </View>
       <View style={styles.meta}>
-        <Text style={styles.title} numberOfLines={1}>
+        <Text
+          style={[styles.title, titleStyle]}
+          numberOfLines={2}
+          ellipsizeMode="tail">
           {book.title}
         </Text>
         {isRead ? (
@@ -60,6 +64,17 @@ function BookCardBase({ book, selected, selectionMode, width, onPress, onLongPre
 }
 
 export const BookCard = memo(BookCardBase);
+
+function getTitleTextStyle(title: string) {
+  const weightedLength = Array.from(title).reduce((count, char) => count + (char.charCodeAt(0) > 255 ? 1 : 0.55), 0);
+  if (weightedLength > 28) {
+    return { fontSize: 14, lineHeight: 18 };
+  }
+  if (weightedLength > 20) {
+    return { fontSize: 15, lineHeight: 19 };
+  }
+  return { fontSize: 16, lineHeight: 20 };
+}
 
 const styles = StyleSheet.create({
   card: {
@@ -101,8 +116,7 @@ const styles = StyleSheet.create({
     gap: Spacing.one,
   },
   title: {
-    fontSize: 16,
-    lineHeight: 21,
+    minHeight: 40,
     fontWeight: '900',
     color: Colors.light.text,
   },

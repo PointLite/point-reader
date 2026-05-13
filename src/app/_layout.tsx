@@ -14,8 +14,9 @@ export default function RootLayout() {
             headerShown: false,
             animation: 'none',
             contentStyle: { backgroundColor: '#F7F5EF' },
-          }}
-        />
+          }}>
+          <Stack.Screen name="reader/[bookId]" options={{ gestureEnabled: false }} />
+        </Stack>
       </ReaderProvider>
     </GestureHandlerRootView>
   );

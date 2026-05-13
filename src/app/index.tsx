@@ -2,19 +2,21 @@ import { useFocusEffect, router } from 'expo-router';
 import {
   ArrowDownAZ,
   ArrowUpAZ,
+  Check,
   CircleEllipsis,
   FolderPlus,
   Info,
-  Menu,
   Plus,
   Search,
+  Settings,
   Trash2,
 } from 'lucide-react-native';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -41,15 +43,19 @@ const sortLabels: Record<SortField, string> = {
   progress: '进度',
 };
 
+const SORT_POPOVER_WIDTH = 156;
+
 export default function ShelfScreen() {
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const [books, setBooks] = useState<Book[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
-  const [sort, setSort] = useState<SortState>({ field: 'updatedAt', direction: 'desc' });
+  const [sort, setSort] = useState<SortState>({ field: 'title', direction: 'asc' });
   const [showSort, setShowSort] = useState(false);
+  const [sortMenuFrame, setSortMenuFrame] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const moreButtonRef = useRef<View>(null);
 
   const selectionMode = selectedIds.length > 0;
   const gridGap = Spacing.three;
@@ -76,15 +82,32 @@ export default function ShelfScreen() {
 
   const selectedCount = selectedIds.length;
 
-  const setSortField = async (field: SortField) => {
-    const next: SortState =
-      field === sort.field
-        ? { ...sort, direction: sort.direction === 'asc' ? 'desc' : 'asc' }
-        : { field, direction: 'asc' };
+  const toggleSortMenu = () => {
+    if (showSort) {
+      setShowSort(false);
+      return;
+    }
+
+    moreButtonRef.current?.measureInWindow((x, y, frameWidth, frameHeight) => {
+      setSortMenuFrame({ x, y, width: frameWidth, height: frameHeight });
+      setShowSort(true);
+    });
+  };
+
+  const applySort = async (next: SortState) => {
     setSort(next);
-    setShowSort(false);
     await saveSortState(next);
     setBooks(await searchBooks(query, next));
+  };
+
+  const setSortField = async (field: SortField) => {
+    if (field === sort.field) return;
+    await applySort({ ...sort, field });
+  };
+
+  const setSortDirection = async (direction: SortState['direction']) => {
+    if (direction === sort.direction) return;
+    await applySort({ ...sort, direction });
   };
 
   const onImport = async () => {
@@ -142,56 +165,22 @@ export default function ShelfScreen() {
               }}
               style={styles.searchInput}
             />
-            <View style={styles.searchDivider} />
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="导入书籍"
-              disabled={importing}
-              onPress={openImportOptions}
-              style={styles.searchAddButton}>
-              <Plus size={24} color={Colors.light.text} strokeWidth={2.2} />
-            </Pressable>
           </View>
-          <View style={styles.moreMenuAnchor}>
+          <View ref={moreButtonRef} style={styles.moreMenuAnchor}>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="排序"
-              onPress={() => setShowSort((value) => !value)}
+              onPress={toggleSortMenu}
               style={styles.headerIconButton}>
               <CircleEllipsis size={24} color={Colors.light.text} strokeWidth={2.2} />
             </Pressable>
-            {showSort ? (
-              <View style={styles.sortPopover}>
-                {(Object.keys(sortLabels) as SortField[]).map((field) => {
-                  const Icon = sort.direction === 'asc' ? ArrowDownAZ : ArrowUpAZ;
-                  const selected = field === sort.field;
-                  return (
-                    <Pressable
-                      key={field}
-                      accessibilityRole="button"
-                      accessibilityLabel={`按${sortLabels[field]}排序`}
-                      onPress={() => setSortField(field)}
-                      style={({ pressed }) => [
-                        styles.sortMenuItem,
-                        selected && styles.sortMenuItemSelected,
-                        pressed && styles.sortMenuItemPressed,
-                      ]}>
-                      <Icon size={18} color={selected ? Colors.light.surface : Colors.light.text} />
-                      <Text style={[styles.sortMenuText, selected && styles.sortMenuTextSelected]}>
-                        {sortLabels[field]}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            ) : null}
           </View>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="设置"
             onPress={() => router.push('/settings')}
             style={styles.headerIconButton}>
-            <Menu size={24} color={Colors.light.text} strokeWidth={2.2} />
+            <Settings size={24} color={Colors.light.text} strokeWidth={2.2} />
           </Pressable>
         </View>
       </View>
@@ -249,6 +238,76 @@ export default function ShelfScreen() {
           </View>
         </View>
       ) : null}
+
+      <Modal visible={showSort} transparent animationType="none" onRequestClose={() => setShowSort(false)}>
+        <View style={styles.sortModalLayer}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="关闭排序菜单"
+            onPress={() => setShowSort(false)}
+            style={StyleSheet.absoluteFillObject}
+          />
+          <View
+            style={[
+              styles.sortPopover,
+              {
+                top: sortMenuFrame ? sortMenuFrame.y + sortMenuFrame.height + Spacing.one : Spacing.six,
+                right: sortMenuFrame
+                  ? Math.max(Spacing.three, width - sortMenuFrame.x - sortMenuFrame.width)
+                  : Spacing.three,
+                maxHeight: Math.max(TouchTarget * 2, height - (sortMenuFrame ? sortMenuFrame.y + sortMenuFrame.height : 0) - Spacing.four),
+              },
+            ]}>
+            {(Object.keys(sortLabels) as SortField[]).map((field) => {
+              const selected = field === sort.field;
+              return (
+                <Pressable
+                  key={field}
+                  accessibilityRole="button"
+                  accessibilityLabel={`按${sortLabels[field]}排序`}
+                  onPress={() => setSortField(field)}
+                  style={({ pressed }) => [
+                    styles.sortMenuItem,
+                    selected && styles.sortMenuItemSelected,
+                    pressed && styles.sortMenuItemPressed,
+                  ]}>
+                  <View style={styles.sortMenuIconSlot}>
+                    {selected ? <Check size={18} color={Colors.light.surface} strokeWidth={3} /> : null}
+                  </View>
+                  <Text style={[styles.sortMenuText, selected && styles.sortMenuTextSelected]}>
+                    {sortLabels[field]}
+                  </Text>
+                </Pressable>
+              );
+            })}
+            <View style={styles.sortMenuSeparator} />
+            {([
+              { direction: 'asc', label: '升序', icon: ArrowDownAZ },
+              { direction: 'desc', label: '降序', icon: ArrowUpAZ },
+            ] as const).map((item) => {
+              const selected = item.direction === sort.direction;
+              const Icon = item.icon;
+              return (
+                <Pressable
+                  key={item.direction}
+                  accessibilityRole="button"
+                  accessibilityLabel={item.label}
+                  onPress={() => setSortDirection(item.direction)}
+                  style={({ pressed }) => [
+                    styles.sortMenuItem,
+                    selected && styles.sortMenuItemSelected,
+                    pressed && styles.sortMenuItemPressed,
+                  ]}>
+                  <Icon size={18} color={selected ? Colors.light.surface : Colors.light.text} />
+                  <Text style={[styles.sortMenuText, selected && styles.sortMenuTextSelected]}>
+                    {item.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -333,6 +392,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingLeft: Spacing.three,
+    paddingRight: Spacing.three,
   },
   searchInput: {
     flex: 1,
@@ -341,26 +401,16 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
     paddingHorizontal: Spacing.two,
   },
-  searchDivider: {
-    width: 1,
-    height: 28,
-    backgroundColor: Colors.light.border,
-  },
-  searchAddButton: {
-    width: 52,
-    height: 52,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   moreMenuAnchor: {
     position: 'relative',
     zIndex: 30,
   },
+  sortModalLayer: {
+    flex: 1,
+  },
   sortPopover: {
     position: 'absolute',
-    top: TouchTarget + Spacing.one,
-    right: 0,
-    width: 156,
+    width: SORT_POPOVER_WIDTH,
     borderRadius: Radius.medium,
     borderWidth: 1,
     borderColor: Colors.light.text,
@@ -381,6 +431,17 @@ const styles = StyleSheet.create({
   },
   sortMenuItemPressed: {
     opacity: 0.72,
+  },
+  sortMenuIconSlot: {
+    width: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sortMenuSeparator: {
+    height: 1,
+    marginVertical: Spacing.one,
+    backgroundColor: Colors.light.border,
   },
   sortMenuText: {
     fontSize: 15,
