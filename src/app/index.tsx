@@ -1,0 +1,422 @@
+import { useFocusEffect, router } from 'expo-router';
+import {
+  ArrowDownAZ,
+  ArrowUpAZ,
+  CircleEllipsis,
+  FolderPlus,
+  Info,
+  Menu,
+  Plus,
+  Search,
+  Trash2,
+} from 'lucide-react-native';
+import React, { useCallback, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  useWindowDimensions,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { BookCard } from '@/components/book-card';
+import { InkButton } from '@/components/ink-button';
+import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
+import { deleteBooks, searchBooks } from '@/lib/books';
+import { importPickedBooks } from '@/lib/importBooks';
+import { loadSortState, saveSortState } from '@/lib/settings';
+import type { Book, SortField, SortState } from '@/types/reader';
+
+type ShelfItem = { type: 'book'; book: Book } | { type: 'import' };
+
+const sortLabels: Record<SortField, string> = {
+  updatedAt: '最近',
+  title: '书名',
+  author: '作者',
+  progress: '进度',
+};
+
+export default function ShelfScreen() {
+  const { width } = useWindowDimensions();
+  const [books, setBooks] = useState<Book[]>([]);
+  const [query, setQuery] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const [sort, setSort] = useState<SortState>({ field: 'updatedAt', direction: 'desc' });
+  const [showSort, setShowSort] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  const selectionMode = selectedIds.length > 0;
+  const gridGap = Spacing.three;
+  const horizontalPadding = Spacing.three * 2;
+  const bookWidth = Math.floor((width - horizontalPadding - gridGap * 2) / 3);
+  const shelfItems: ShelfItem[] = [
+    ...books.map((book) => ({ type: 'book' as const, book })),
+    { type: 'import' },
+  ];
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    const nextSort = await loadSortState();
+    setSort(nextSort);
+    setBooks(await searchBooks(query, nextSort));
+    setLoading(false);
+  }, [query]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refresh();
+    }, [refresh])
+  );
+
+  const selectedCount = selectedIds.length;
+
+  const setSortField = async (field: SortField) => {
+    const next: SortState =
+      field === sort.field
+        ? { ...sort, direction: sort.direction === 'asc' ? 'desc' : 'asc' }
+        : { field, direction: 'asc' };
+    setSort(next);
+    setShowSort(false);
+    await saveSortState(next);
+    setBooks(await searchBooks(query, next));
+  };
+
+  const onImport = async () => {
+    setImporting(true);
+    try {
+      await importPickedBooks();
+      await refresh();
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const openImportOptions = () => {
+    Alert.alert('导入书籍', '选择导入方式', [
+      { text: '本地文件', onPress: onImport },
+      { text: 'WebDAV', onPress: () => router.push('/webdav') },
+      { text: '取消', style: 'cancel' },
+    ]);
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+    );
+  };
+
+  const deleteSelection = () => {
+    Alert.alert('删除书籍', `确定删除已选 ${selectedCount} 本书？`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: async () => {
+          await deleteBooks(selectedIds);
+          setSelectedIds([]);
+          await refresh();
+        },
+      },
+    ]);
+  };
+
+  const header = (
+      <View style={styles.header}>
+        <View style={styles.topControls}>
+          <View style={styles.searchBox}>
+            <Search size={20} color={Colors.light.textSecondary} strokeWidth={2.2} />
+            <TextInput
+              accessibilityLabel="搜索书籍"
+              placeholder={`在 ${books.length} 本书籍中搜索...`}
+              placeholderTextColor={Colors.light.textSecondary}
+              value={query}
+              onChangeText={async (text) => {
+                setQuery(text);
+                setBooks(await searchBooks(text, sort));
+              }}
+              style={styles.searchInput}
+            />
+            <View style={styles.searchDivider} />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="导入书籍"
+              disabled={importing}
+              onPress={openImportOptions}
+              style={styles.searchAddButton}>
+              <Plus size={24} color={Colors.light.text} strokeWidth={2.2} />
+            </Pressable>
+          </View>
+          <View style={styles.moreMenuAnchor}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="排序"
+              onPress={() => setShowSort((value) => !value)}
+              style={styles.headerIconButton}>
+              <CircleEllipsis size={24} color={Colors.light.text} strokeWidth={2.2} />
+            </Pressable>
+            {showSort ? (
+              <View style={styles.sortPopover}>
+                {(Object.keys(sortLabels) as SortField[]).map((field) => {
+                  const Icon = sort.direction === 'asc' ? ArrowDownAZ : ArrowUpAZ;
+                  const selected = field === sort.field;
+                  return (
+                    <Pressable
+                      key={field}
+                      accessibilityRole="button"
+                      accessibilityLabel={`按${sortLabels[field]}排序`}
+                      onPress={() => setSortField(field)}
+                      style={({ pressed }) => [
+                        styles.sortMenuItem,
+                        selected && styles.sortMenuItemSelected,
+                        pressed && styles.sortMenuItemPressed,
+                      ]}>
+                      <Icon size={18} color={selected ? Colors.light.surface : Colors.light.text} />
+                      <Text style={[styles.sortMenuText, selected && styles.sortMenuTextSelected]}>
+                        {sortLabels[field]}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : null}
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="设置"
+            onPress={() => router.push('/settings')}
+            style={styles.headerIconButton}>
+            <Menu size={24} color={Colors.light.text} strokeWidth={2.2} />
+          </Pressable>
+        </View>
+      </View>
+  );
+
+  return (
+    <SafeAreaView style={styles.screen}>
+      {loading ? (
+        <View style={styles.loading}>
+          <ActivityIndicator color={Colors.light.text} />
+        </View>
+      ) : (
+        <FlatList
+          data={shelfItems}
+          keyExtractor={(item) => (item.type === 'book' ? item.book.id : 'import-tile')}
+          ListHeaderComponent={header}
+          numColumns={3}
+          columnWrapperStyle={[styles.gridRow, { gap: gridGap }]}
+          contentContainerStyle={[styles.gridContent, selectionMode && styles.listWithSheet]}
+          renderItem={({ item }) => (
+            item.type === 'import' ? (
+              <ImportTile width={bookWidth} importing={importing} onPress={openImportOptions} />
+            ) : (
+              <BookCard
+                book={item.book}
+                width={bookWidth}
+                selected={selectedIds.includes(item.book.id)}
+                selectionMode={selectionMode}
+                onLongPress={() => toggleSelected(item.book.id)}
+                onPress={() => {
+                  if (selectionMode) {
+                    toggleSelected(item.book.id);
+                  } else {
+                    router.push({ pathname: '/reader/[bookId]', params: { bookId: item.book.id } });
+                  }
+                }}
+              />
+            )
+          )}
+        />
+      )}
+
+      {selectionMode ? (
+        <View style={styles.selectionSheet}>
+          <Text style={styles.selectionTitle}>已选择 {selectedCount} 本</Text>
+          <View style={styles.sheetActions}>
+            <InkButton label="分组" icon={FolderPlus} onPress={() => Alert.alert('分组', '第一版会保留分组入口，数据结构已准备。')} />
+            <InkButton
+              label="详情"
+              icon={Info}
+              disabled={selectedCount !== 1}
+              onPress={() => router.push({ pathname: '/book/[bookId]', params: { bookId: selectedIds[0] } })}
+            />
+            <InkButton label="删除" icon={Trash2} variant="danger" onPress={deleteSelection} />
+          </View>
+        </View>
+      ) : null}
+    </SafeAreaView>
+  );
+}
+
+function ImportTile({
+  width,
+  importing,
+  onPress,
+}: {
+  width: number;
+  importing: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="导入书籍"
+      disabled={importing}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.importTile,
+        {
+          width,
+          height: width * 1.44,
+          opacity: importing ? 0.45 : pressed ? 0.65 : 1,
+        },
+      ]}>
+      <Plus size={42} color={Colors.light.textSecondary} strokeWidth={1.8} />
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: Colors.light.background,
+  },
+  loading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gridContent: {
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.three,
+    paddingBottom: Spacing.five,
+    gap: Spacing.four,
+  },
+  gridRow: {
+    alignItems: 'flex-start',
+  },
+  listWithSheet: {
+    paddingBottom: 144,
+  },
+  header: {
+    marginBottom: Spacing.two,
+    zIndex: 20,
+  },
+  topControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    overflow: 'visible',
+  },
+  headerIconButton: {
+    width: TouchTarget,
+    height: TouchTarget,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchBox: {
+    flex: 1,
+    minHeight: 52,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: Spacing.three,
+  },
+  searchInput: {
+    flex: 1,
+    minHeight: 48,
+    fontSize: 18,
+    color: Colors.light.text,
+    paddingHorizontal: Spacing.two,
+  },
+  searchDivider: {
+    width: 1,
+    height: 28,
+    backgroundColor: Colors.light.border,
+  },
+  searchAddButton: {
+    width: 52,
+    height: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  moreMenuAnchor: {
+    position: 'relative',
+    zIndex: 30,
+  },
+  sortPopover: {
+    position: 'absolute',
+    top: TouchTarget + Spacing.one,
+    right: 0,
+    width: 156,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.text,
+    backgroundColor: Colors.light.surface,
+    paddingVertical: Spacing.one,
+    zIndex: 40,
+    elevation: 6,
+  },
+  sortMenuItem: {
+    minHeight: TouchTarget,
+    paddingHorizontal: Spacing.three,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  sortMenuItemSelected: {
+    backgroundColor: Colors.light.text,
+  },
+  sortMenuItemPressed: {
+    opacity: 0.72,
+  },
+  sortMenuText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: Colors.light.text,
+  },
+  sortMenuTextSelected: {
+    color: Colors.light.surface,
+  },
+  importTile: {
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectionSheet: {
+    position: 'absolute',
+    left: Spacing.three,
+    right: Spacing.three,
+    bottom: Spacing.three,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.text,
+    backgroundColor: Colors.light.surface,
+    padding: Spacing.three,
+    gap: Spacing.three,
+  },
+  selectionTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: Colors.light.text,
+  },
+  sheetActions: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+});
