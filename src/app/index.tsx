@@ -11,7 +11,7 @@ import {
   Settings,
   Trash2,
 } from 'lucide-react-native';
-import React, { useCallback, useRef, useState } from 'react';
+import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -56,23 +56,29 @@ export default function ShelfScreen() {
   const [sortMenuFrame, setSortMenuFrame] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const moreButtonRef = useRef<View>(null);
+  const queryRef = useRef('');
+  const sortRef = useRef<SortState>({ field: 'title', direction: 'asc' });
 
   const selectionMode = selectedIds.length > 0;
   const gridGap = Spacing.three;
   const horizontalPadding = Spacing.three * 2;
   const bookWidth = Math.floor((width - horizontalPadding - gridGap * 2) / 3);
-  const shelfItems: ShelfItem[] = [
-    ...books.map((book) => ({ type: 'book' as const, book })),
-    { type: 'import' },
-  ];
+  const shelfItems: ShelfItem[] = useMemo(
+    () => [
+      ...books.map((book) => ({ type: 'book' as const, book })),
+      { type: 'import' },
+    ],
+    [books]
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
     const nextSort = await loadSortState();
+    sortRef.current = nextSort;
     setSort(nextSort);
-    setBooks(await searchBooks(query, nextSort));
+    setBooks(await searchBooks(queryRef.current, nextSort));
     setLoading(false);
-  }, [query]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -95,9 +101,10 @@ export default function ShelfScreen() {
   };
 
   const applySort = async (next: SortState) => {
+    sortRef.current = next;
     setSort(next);
     await saveSortState(next);
-    setBooks(await searchBooks(query, next));
+    setBooks(await searchBooks(queryRef.current, next));
   };
 
   const setSortField = async (field: SortField) => {
@@ -149,45 +156,21 @@ export default function ShelfScreen() {
     ]);
   };
 
-  const header = (
-      <View style={styles.header}>
-        <View style={styles.topControls}>
-          <View style={styles.searchBox}>
-            <Search size={20} color={Colors.light.textSecondary} strokeWidth={2.2} />
-            <TextInput
-              accessibilityLabel="搜索书籍"
-              placeholder={`在 ${books.length} 本书籍中搜索...`}
-              placeholderTextColor={Colors.light.textSecondary}
-              value={query}
-              onChangeText={async (text) => {
-                setQuery(text);
-                setBooks(await searchBooks(text, sort));
-              }}
-              style={styles.searchInput}
-            />
-          </View>
-          <View ref={moreButtonRef} style={styles.moreMenuAnchor}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="排序"
-              onPress={toggleSortMenu}
-              style={styles.headerIconButton}>
-              <CircleEllipsis size={24} color={Colors.light.text} strokeWidth={2.2} />
-            </Pressable>
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="设置"
-            onPress={() => router.push('/settings')}
-            style={styles.headerIconButton}>
-            <Settings size={24} color={Colors.light.text} strokeWidth={2.2} />
-          </Pressable>
-        </View>
-      </View>
-  );
+  const updateQuery = useCallback(async (text: string) => {
+    queryRef.current = text;
+    setQuery(text);
+    setBooks(await searchBooks(text, sortRef.current));
+  }, []);
 
   return (
     <SafeAreaView style={styles.screen}>
+      <ShelfHeader
+        query={query}
+        bookCount={books.length}
+        moreButtonRef={moreButtonRef}
+        onChangeQuery={updateQuery}
+        onToggleSortMenu={toggleSortMenu}
+      />
       {loading ? (
         <View style={styles.loading}>
           <ActivityIndicator color={Colors.light.text} />
@@ -196,7 +179,6 @@ export default function ShelfScreen() {
         <FlatList
           data={shelfItems}
           keyExtractor={(item) => (item.type === 'book' ? item.book.id : 'import-tile')}
-          ListHeaderComponent={header}
           numColumns={3}
           columnWrapperStyle={[styles.gridRow, { gap: gridGap }]}
           contentContainerStyle={[styles.gridContent, selectionMode && styles.listWithSheet]}
@@ -312,6 +294,54 @@ export default function ShelfScreen() {
   );
 }
 
+const ShelfHeader = memo(function ShelfHeader({
+  query,
+  bookCount,
+  moreButtonRef,
+  onChangeQuery,
+  onToggleSortMenu,
+}: {
+  query: string;
+  bookCount: number;
+  moreButtonRef: React.RefObject<View | null>;
+  onChangeQuery: (text: string) => void;
+  onToggleSortMenu: () => void;
+}) {
+  return (
+    <View style={styles.header}>
+      <View style={styles.topControls}>
+        <View style={styles.searchBox}>
+          <Search size={20} color={Colors.light.textSecondary} strokeWidth={2.2} />
+          <TextInput
+            accessibilityLabel="搜索书籍"
+            placeholder={`在 ${bookCount} 本书籍中搜索...`}
+            placeholderTextColor={Colors.light.textSecondary}
+            value={query}
+            onChangeText={onChangeQuery}
+            style={styles.searchInput}
+          />
+        </View>
+        <View ref={moreButtonRef} style={styles.moreMenuAnchor}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="排序"
+            onPress={onToggleSortMenu}
+            style={styles.headerIconButton}>
+            <CircleEllipsis size={24} color={Colors.light.text} strokeWidth={2.2} />
+          </Pressable>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="设置"
+          onPress={() => router.push('/settings')}
+          style={styles.headerIconButton}>
+          <Settings size={24} color={Colors.light.text} strokeWidth={2.2} />
+        </Pressable>
+      </View>
+    </View>
+  );
+});
+
 function ImportTile({
   width,
   importing,
@@ -363,7 +393,9 @@ const styles = StyleSheet.create({
     paddingBottom: 144,
   },
   header: {
-    marginBottom: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.three,
+    paddingBottom: Spacing.two,
     zIndex: 20,
   },
   topControls: {

@@ -5,7 +5,6 @@ import React, { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { InkButton } from '@/components/ink-button';
 import { SettingRow } from '@/components/setting-row';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
 import { defaultReadingSettings, loadReadingSettings, saveReadingSettings } from '@/lib/settings';
@@ -54,20 +53,26 @@ export default function SettingsScreen() {
         />
 
         <View style={styles.panel}>
-          <Text style={styles.panelTitle}>翻页方式</Text>
-          <View style={styles.segmented}>
-            <InkButton
-              label="滚动"
-              selected={settings.mode === 'scroll'}
-              onPress={() => update({ mode: 'scroll' })}
-              style={styles.segmentButton}
-            />
-            <InkButton
-              label="点击"
-              selected={settings.mode === 'tap'}
-              onPress={() => update({ mode: 'tap' })}
-              style={styles.segmentButton}
-            />
+          <View style={styles.modeRow}>
+            <Text style={styles.panelTitle}>翻页方式</Text>
+            <View style={styles.modeCapsule}>
+              {(['scroll', 'tap'] as ReadingSettings['mode'][]).map((mode) => {
+                const selected = settings.mode === mode;
+                return (
+                  <Pressable
+                    key={mode}
+                    accessibilityRole="button"
+                    accessibilityLabel={mode === 'scroll' ? '滚动翻页' : '点击翻页'}
+                    accessibilityState={{ selected }}
+                    onPress={() => update({ mode })}
+                    style={[styles.modeOption, selected && styles.modeOptionSelected]}>
+                    <Text style={[styles.modeOptionText, selected && styles.modeOptionTextSelected]}>
+                      {mode === 'scroll' ? '滚动' : '点击'}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </View>
         </View>
 
@@ -163,12 +168,40 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: Colors.light.text,
   },
-  segmented: {
+  modeRow: {
+    minHeight: TouchTarget,
     flexDirection: 'row',
-    gap: Spacing.two,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.three,
   },
-  segmentButton: {
+  modeCapsule: {
+    flexDirection: 'row',
+    width: 150,
+    minHeight: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.light.backgroundElement,
+    padding: Spacing.one,
+    gap: Spacing.one,
+  },
+  modeOption: {
     flex: 1,
+    minHeight: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modeOptionSelected: {
+    backgroundColor: Colors.light.text,
+  },
+  modeOptionText: {
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '700',
+    color: Colors.light.textSecondary,
+  },
+  modeOptionTextSelected: {
+    color: Colors.light.surface,
   },
   value: {
     fontSize: 14,

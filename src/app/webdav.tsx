@@ -13,10 +13,11 @@ import {
   Trash2,
   X,
 } from 'lucide-react-native';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
   Modal,
   Pressable,
@@ -217,6 +218,11 @@ export default function WebDavScreen() {
     }
   };
 
+  const closeToHome = () => {
+    router.dismissAll();
+    router.replace('/');
+  };
+
   return (
     <SafeAreaView style={styles.screen}>
       <View style={styles.topBar}>
@@ -232,19 +238,28 @@ export default function WebDavScreen() {
           ) : null}
         </View>
         {browseState ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="导入所选内容"
-            disabled={selectedEntries.length === 0 || importing}
-            onPress={importSelection}
-            style={({ pressed }) => [
-              styles.actionButton,
-              selectedEntries.length === 0 && styles.actionButtonDisabled,
-              pressed && styles.pressed,
-            ]}>
-            {importing ? <ActivityIndicator color={Colors.light.surface} /> : <Download size={20} color={Colors.light.surface} />}
-            <Text style={styles.actionButtonText}>导入</Text>
-          </Pressable>
+          <View style={styles.browseActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="关闭 WebDAV 浏览"
+              onPress={closeToHome}
+              style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}>
+              <X size={22} color={Colors.light.text} />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="导入所选内容"
+              disabled={selectedEntries.length === 0 || importing}
+              onPress={importSelection}
+              style={({ pressed }) => [
+                styles.actionButton,
+                selectedEntries.length === 0 && styles.actionButtonDisabled,
+                pressed && styles.pressed,
+              ]}>
+              {importing ? <ActivityIndicator color={Colors.light.surface} /> : <Download size={20} color={Colors.light.surface} />}
+              <Text style={styles.actionButtonText}>导入</Text>
+            </Pressable>
+          </View>
         ) : (
           <Pressable
             accessibilityRole="button"
@@ -378,6 +393,8 @@ function WebDavEntryRow({
   onToggle: () => void;
   onPress: () => void;
 }) {
+  const fileMeta = entry.type === 'file' ? entryMetaText(entry) : null;
+
   return (
     <View style={styles.entry}>
       <Pressable
@@ -404,9 +421,8 @@ function WebDavEntryRow({
           <FileText size={24} color={Colors.light.textSecondary} />
         )}
         <View style={styles.entryCopy}>
-          <Text style={styles.entryName} numberOfLines={1}>
-            {entry.name}
-          </Text>
+          <AutoScrollText text={entry.name} textStyle={styles.entryName} />
+          {fileMeta ? <Text style={styles.entryMeta}>{fileMeta}</Text> : null}
         </View>
         {entry.type === 'directory' ? <ChevronRight size={20} color={Colors.light.textSecondary} /> : null}
       </Pressable>
@@ -517,6 +533,75 @@ function EmptyState({ loading, text }: { loading: boolean; text: string }) {
   );
 }
 
+const AutoScrollText = memo(function AutoScrollText({
+  text,
+  textStyle,
+}: {
+  text: string;
+  textStyle: object;
+}) {
+  const translateX = useRef(new Animated.Value(0)).current;
+  const [containerWidth, setContainerWidth] = useState(0);
+  const estimatedWidth = useMemo(() => estimateEntryNameWidth(text), [text]);
+  const [measuredWidth, setMeasuredWidth] = useState(0);
+  const contentWidth = Math.max(measuredWidth, estimatedWidth);
+  const overflow = Math.max(0, contentWidth - containerWidth);
+
+  useEffect(() => {
+    translateX.stopAnimation();
+    translateX.setValue(0);
+    if (overflow <= 2) return;
+
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.delay(900),
+        Animated.timing(translateX, {
+          toValue: -overflow,
+          duration: Math.max(2600, overflow * 45),
+          useNativeDriver: true,
+        }),
+        Animated.delay(900),
+        Animated.timing(translateX, {
+          toValue: 0,
+          duration: 1,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    animation.start();
+    return () => {
+      animation.stop();
+    };
+  }, [overflow, translateX]);
+
+  return (
+    <View
+      style={styles.autoTextViewport}
+      onLayout={(event) => setContainerWidth(event.nativeEvent.layout.width)}>
+      <Text
+        numberOfLines={1}
+        onTextLayout={(event) => {
+          const lineWidth = event.nativeEvent.lines[0]?.width ?? 0;
+          setMeasuredWidth(Math.ceil(lineWidth));
+        }}
+        style={[textStyle, styles.autoTextMeasure]}>
+        {text}
+      </Text>
+      <Animated.Text
+        numberOfLines={1}
+        ellipsizeMode="clip"
+        style={[
+          textStyle,
+          styles.autoTextContent,
+          contentWidth > 0 && { width: contentWidth },
+          { transform: [{ translateX }] },
+        ]}>
+        {text}
+      </Animated.Text>
+    </View>
+  );
+});
+
 function directoryNameFromUrl(url: string) {
   try {
     const parsed = new URL(url);
@@ -529,6 +614,44 @@ function directoryNameFromUrl(url: string) {
 
 function normalizeDirectoryUrl(url: string) {
   return url.endsWith('/') ? url : `${url}/`;
+}
+
+function estimateEntryNameWidth(text: string) {
+  return Array.from(text).reduce((total, char) => {
+    if (/[\u3000-\u9fff\uff00-\uffef]/.test(char)) return total + 17;
+    if (/[A-Z0-9]/.test(char)) return total + 10;
+    if (/[mwMW]/.test(char)) return total + 12;
+    if (/[ilI.,;:'|!]/.test(char)) return total + 5;
+    if (/\s/.test(char)) return total + 4;
+    return total + 8;
+  }, 0);
+}
+
+function entryMetaText(entry: WebDavEntry) {
+  return [fileTypeLabel(entry.name), formatFileSize(entry.size), formatEntryDate(entry.modifiedAt)]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function fileTypeLabel(name: string) {
+  const ext = name.split('.').pop()?.trim().toUpperCase();
+  if (!ext || ext === name.toUpperCase()) return '文件';
+  if (ext === 'EPUB' || ext === 'TXT' || ext === 'PDF') return ext;
+  return `${ext} 文件`;
+}
+
+function formatFileSize(size?: number) {
+  if (!Number.isFinite(size) || typeof size !== 'number' || size < 0) return '';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(size / 1024 / 1024).toFixed(size < 10 * 1024 * 1024 ? 2 : 1)} MB`;
+}
+
+function formatEntryDate(modifiedAt?: string) {
+  if (!modifiedAt) return '';
+  const date = new Date(modifiedAt);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
 const styles = StyleSheet.create({
@@ -566,6 +689,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: Colors.light.textSecondary,
+  },
+  browseActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
   },
   actionButton: {
     minHeight: TouchTarget,
@@ -710,11 +838,35 @@ const styles = StyleSheet.create({
   },
   entryCopy: {
     flex: 1,
+    gap: Spacing.half,
+  },
+  autoTextViewport: {
+    width: '100%',
+    overflow: 'hidden',
+  },
+  autoTextMeasure: {
+    position: 'absolute',
+    opacity: 0,
+    left: 0,
+    top: 0,
+    zIndex: -1,
+    flexShrink: 0,
+    width: 10000,
+  },
+  autoTextContent: {
+    alignSelf: 'flex-start',
+    flexShrink: 0,
   },
   entryName: {
     fontSize: 16,
     fontWeight: '900',
     color: Colors.light.text,
+  },
+  entryMeta: {
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '700',
+    color: Colors.light.textSecondary,
   },
   empty: {
     minHeight: 160,

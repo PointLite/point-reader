@@ -62,13 +62,13 @@ const STYLE_PROGRESS_GUARD_MS = 2500;
 const PROGRESS_SAVE_DEBOUNCE_MS = 100;
 const READER_TOOLBAR_HEIGHT = 68;
 const ACTIVE_TOOL_COLOR = '#3478F6';
-const BATTERY_BODY_WIDTH = 30;
-const BATTERY_BODY_HEIGHT = 16;
+const BATTERY_BODY_WIDTH = 26;
+const BATTERY_BODY_HEIGHT = 14;
 
 const EPUB_IMAGE_PREVIEW_SCRIPT = `
+setTimeout(function () {
 (function () {
   if (window.__pointReaderImagePreviewInstalled) {
-    true;
     return;
   }
 
@@ -309,6 +309,7 @@ const EPUB_IMAGE_PREVIEW_SCRIPT = `
 
   true;
 })();
+}, 0);
 true;
 `;
 
@@ -1138,11 +1139,11 @@ function EpubScrollPane({
   useEffect(() => {
     if (!jumpRequest) return;
     webViewRef.current?.injectJavaScript(`
-      void (function () {
+      setTimeout(function () {
         if (window.PointReader && window.PointReader.jumpTo) {
           window.PointReader.jumpTo(${jumpRequest.index});
         }
-      })();
+      }, 0);
       true;
     `);
   }, [jumpRequest]);
@@ -1154,11 +1155,11 @@ function EpubScrollPane({
     const index = Math.min(chapterCount - 1, Math.max(0, Math.floor(absolute)));
     const offset = index === chapterCount - 1 && seekRequest.progress >= 0.999 ? 1 : clamp(absolute - index, 0, 1);
     webViewRef.current?.injectJavaScript(`
-      void (function () {
+      setTimeout(function () {
         if (window.PointReader && window.PointReader.jumpToOffset) {
           window.PointReader.jumpToOffset(${index}, ${offset});
         }
-      })();
+      }, 0);
       true;
     `);
   }, [book.chapters.length, seekRequest]);
@@ -1223,10 +1224,10 @@ function createEpubCssVars(settings: ReadingSettings) {
 function createEpubSettingsScript(settings: ReadingSettings) {
   const vars = createEpubCssVars(settings);
   return `
-    void (function () {
+    setTimeout(function () {
       if (!window.PointReader || !window.PointReader.applySettings) return;
       window.PointReader.applySettings(${JSON.stringify(vars)});
-    })();
+    }, 0);
     true;
   `;
 }
@@ -1968,7 +1969,7 @@ function ReaderSheet({
                   const targetHref = normalizeEpubDisplayHref(chapter.href);
                   if (targetHref) {
                     injectJavascript(`
-                      void (function () {
+                      setTimeout(function () {
                         var target = ${JSON.stringify(targetHref)};
                         if (typeof rendition === 'undefined' || !rendition) return;
                         window.__pointReaderJumpGeneration = (window.__pointReaderJumpGeneration || 0) + 1;
@@ -2029,7 +2030,7 @@ function ReaderSheet({
                                 }
                               });
                           });
-                      })();
+                      }, 0);
                       true;
                     `);
                   }
@@ -2483,21 +2484,12 @@ function ReaderMetricControl({
 
 function BatteryBadge({ value }: { value: number | null }) {
   const normalizedValue = Math.round(clamp(value ?? 0, 0, 100));
-  const fillWidth = Math.round((normalizedValue / 100) * BATTERY_BODY_WIDTH);
   const batteryText = String(normalizedValue);
 
   return (
     <View style={styles.batteryBadge} accessibilityLabel={`电量 ${value === null ? '未知' : `${value}%`}`}>
       <View style={styles.batteryBody}>
-        <View style={styles.batteryTextLayer}>
-          <Text style={styles.batteryBadgeText}>{batteryText}</Text>
-        </View>
-        <View style={[styles.batteryFillClip, { width: fillWidth }]}>
-          <View style={styles.batteryFill} />
-          <View style={styles.batteryTextLayer}>
-            <Text style={[styles.batteryBadgeText, styles.batteryBadgeTextFilled]}>{batteryText}</Text>
-          </View>
-        </View>
+        <Text style={styles.batteryBadgeText}>{batteryText}</Text>
       </View>
       <View style={styles.batteryCap} />
     </View>
@@ -2741,41 +2733,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  batteryFillClip: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    overflow: 'hidden',
-  },
-  batteryFill: {
-    width: BATTERY_BODY_WIDTH,
-    height: BATTERY_BODY_HEIGHT,
-    backgroundColor: 'rgba(28,25,23,0.82)',
-  },
-  batteryTextLayer: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    width: BATTERY_BODY_WIDTH,
-    height: BATTERY_BODY_HEIGHT,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   batteryBadgeText: {
-    fontSize: 9,
-    lineHeight: 9,
-    fontWeight: '700',
     textAlign: 'center',
+    textAlignVertical: 'center',
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '700',
     includeFontPadding: false,
-    color: 'rgba(28,25,23,0.82)',
-  },
-  batteryBadgeTextFilled: {
-    color: Colors.light.surface,
+    color: 'rgba(28,25,23,0.7)',
   },
   batteryCap: {
-    width: 3,
-    height: 7,
+    width: 2.5,
+    height: 6,
     borderTopWidth: 1.5,
     borderRightWidth: 1.5,
     borderBottomWidth: 1.5,
