@@ -20,10 +20,34 @@ const sortSql: Record<SortState['field'], string> = {
 function normalizeBook(row: BookRow): Book {
   return {
     ...row,
+    coverUri: rebaseDocumentUri(row.coverUri),
+    fileUri: rebaseDocumentUri(row.fileUri) ?? row.fileUri,
     progress: Number(row.progress),
     currentOffset: Number(row.currentOffset),
     currentLocation: row.currentLocation ?? null,
   };
+}
+
+function rebaseDocumentUri(uri?: string | null) {
+  if (!uri) return uri ?? null;
+  const currentDocumentDirectory = FileSystem.documentDirectory;
+  if (!currentDocumentDirectory) return uri;
+  const marker = '/Documents/';
+  const markerIndex = uri.indexOf(marker);
+  if (markerIndex < 0) return uri;
+  const relativePath = uri.slice(markerIndex + marker.length);
+  return `${currentDocumentDirectory}${relativePath}`;
+}
+
+async function persistRebasedBookUris(book: Book, row: BookRow) {
+  if (book.fileUri === row.fileUri && book.coverUri === (row.coverUri ?? null)) return;
+  const db = await getDb();
+  await db.runAsync(
+    'UPDATE books SET fileUri = ?, coverUri = ? WHERE id = ?',
+    book.fileUri,
+    book.coverUri ?? null,
+    book.id
+  );
 }
 
 export async function listBooks(sort: SortState): Promise<Book[]> {
@@ -33,6 +57,7 @@ export async function listBooks(sort: SortState): Promise<Book[]> {
     `SELECT * FROM books ORDER BY ${sortSql[sort.field]} ${direction}, updatedAt DESC`
   );
   const books = rows.map(normalizeBook);
+  await Promise.all(books.map((book, index) => persistRebasedBookUris(book, rows[index])));
   await backfillMissingEpubMetadata(books);
   return books;
 }
@@ -49,7 +74,10 @@ export async function searchBooks(query: string, sort: SortState): Promise<Book[
 export async function getBook(id: string): Promise<Book | null> {
   const db = await getDb();
   const row = await db.getFirstAsync<BookRow>('SELECT * FROM books WHERE id = ?', id);
-  return row ? normalizeBook(row) : null;
+  if (!row) return null;
+  const book = normalizeBook(row);
+  await persistRebasedBookUris(book, row);
+  return book;
 }
 
 export async function saveBook(book: Book) {

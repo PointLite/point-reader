@@ -16,7 +16,6 @@ import {
   Sun,
   Type,
   X,
-  type LucideIcon,
 } from 'lucide-react-native';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -34,11 +33,13 @@ import {
   View,
   type ListRenderItemInfo,
   type ViewToken,
+  useColorScheme,
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 
+import { ReaderMetricControl } from '@/components/reader/metric-control';
 import { PdfPane } from '@/components/reader/pdf-pane';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
 import { getBook, updateBookProgress } from '@/lib/books';
@@ -47,10 +48,13 @@ import { useLegacyEpubFileSystem } from '@/lib/epubFileSystem';
 import {
   fontFamilyFor,
   loadTextChapters,
+  readerBackgroundFor,
   readerBackgrounds,
   readerForeground,
+  readerForegroundFor,
 } from '@/lib/readerContent';
 import { defaultReadingSettings, loadReadingSettings, saveReadingSettings } from '@/lib/settings';
+import type { AppColors } from '@/lib/theme';
 import type { Book, ReaderChapter, ReadingSettings } from '@/types/reader';
 
 const KEEP_AWAKE_TAG = 'point-reader:reader';
@@ -60,10 +64,14 @@ const MIN_PREVIEW_SCALE = 1;
 const MAX_PREVIEW_SCALE = 4;
 const STYLE_PROGRESS_GUARD_MS = 2500;
 const PROGRESS_SAVE_DEBOUNCE_MS = 100;
+const BATTERY_REFRESH_INTERVAL_MS = 30000;
 const READER_TOOLBAR_HEIGHT = 68;
 const ACTIVE_TOOL_COLOR = '#3478F6';
 const BATTERY_BODY_WIDTH = 26;
 const BATTERY_BODY_HEIGHT = 14;
+const TAP_ZONE_EDGE_RATIO = 0.35;
+
+type TapZoneAction = 'previous' | 'toolbar' | 'next';
 
 const EPUB_IMAGE_PREVIEW_SCRIPT = `
 setTimeout(function () {
@@ -91,9 +99,11 @@ setTimeout(function () {
     }));
   }
 
-  function sendContentTap() {
+  function sendContentTap(x, width) {
     reactNativeWebview.postMessage(JSON.stringify({
-      type: 'point-reader:content-tap'
+      type: 'point-reader:content-tap',
+      x: typeof x === 'number' ? x : null,
+      width: typeof width === 'number' ? width : null
     }));
   }
 
@@ -237,6 +247,12 @@ setTimeout(function () {
     var startX = 0;
     var startY = 0;
     var moved = false;
+    var lastTouchTapAt = 0;
+
+    function viewportWidth() {
+      var viewRef = documentRef.defaultView || window;
+      return viewRef.innerWidth || documentRef.documentElement.clientWidth || documentRef.body.clientWidth || 0;
+    }
 
     documentRef.addEventListener('touchstart', function (event) {
       if (!event.touches || event.touches.length !== 1) return;
@@ -254,12 +270,15 @@ setTimeout(function () {
 
     documentRef.addEventListener('touchend', function (event) {
       if (moved || findImageTarget(event.target)) return;
-      sendContentTap();
+      if (!event.changedTouches || event.changedTouches.length !== 1) return;
+      lastTouchTapAt = Date.now();
+      sendContentTap(event.changedTouches[0].clientX, viewportWidth());
     }, true);
 
     documentRef.addEventListener('click', function (event) {
+      if (Date.now() - lastTouchTapAt < 450) return;
       if (findImageTarget(event.target)) return;
-      sendContentTap();
+      sendContentTap(event.clientX, viewportWidth());
     }, true);
   }
 
@@ -344,19 +363,26 @@ type EpubSeekRequest = {
   nonce: number;
 };
 
-function createReaderTheme(settings: ReadingSettings) {
+type PdfSeekRequest = {
+  progress: number;
+  nonce: number;
+};
+
+function createReaderTheme(settings: ReadingSettings, systemColorScheme?: 'light' | 'dark' | null) {
   const padding = Math.round(18 + settings.paddingScale * 18);
   const lineHeight = settings.lineHeightScale.toFixed(2);
   const fontSize = `${settings.fontSize}px`;
   const fontFamily = settings.fontFamily === 'serif' ? 'serif' : settings.fontFamily === 'mono' ? 'monospace' : 'sans-serif';
+  const background = readerBackgroundFor(settings, systemColorScheme);
+  const foreground = readerForegroundFor(settings, systemColorScheme);
 
   return {
     html: {
-      background: readerBackgrounds[settings.background],
+      background,
     },
     body: {
-      color: readerForeground,
-      background: readerBackgrounds[settings.background],
+      color: foreground,
+      background,
       'font-size': fontSize,
       'line-height': `${lineHeight} !important`,
       'padding-left': `${padding}px !important`,
@@ -375,6 +401,8 @@ function createReaderTheme(settings: ReadingSettings) {
 
 export default function ReaderScreen() {
   const { bookId } = useLocalSearchParams<{ bookId: string }>();
+  const nativeColorScheme = useColorScheme();
+  const systemColorScheme = nativeColorScheme === 'dark' ? 'dark' : 'light';
   const [book, setBook] = useState<Book | null>(null);
   const [settings, setSettings] = useState<ReadingSettings>(defaultReadingSettings);
   const [chapters, setChapters] = useState<ReaderChapter[]>([]);
@@ -387,6 +415,7 @@ export default function ReaderScreen() {
   const [epubHtmlBook, setEpubHtmlBook] = useState<EpubHtmlBook | null>(null);
   const [epubJumpRequest, setEpubJumpRequest] = useState<{ index: number; nonce: number } | null>(null);
   const [epubSeekRequest, setEpubSeekRequest] = useState<EpubSeekRequest | null>(null);
+  const [pdfSeekRequest, setPdfSeekRequest] = useState<PdfSeekRequest | null>(null);
   const [epubLocation, setEpubLocation] = useState<string | undefined>(undefined);
   const [currentEpubHref, setCurrentEpubHref] = useState<string | undefined>(undefined);
   const [epubReaderKey, setEpubReaderKey] = useState(0);
@@ -492,22 +521,47 @@ export default function ReaderScreen() {
   }, [settings.keepAwake]);
 
   useEffect(() => {
+    let mounted = true;
     const refreshStatus = async () => {
       const now = new Date();
       setTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
-      const level = await Battery.getBatteryLevelAsync();
-      if (Number.isFinite(level) && level >= 0) {
-        setBattery(Math.round(clamp(level, 0, 1) * 100));
-      } else {
-        setBattery((current) => current ?? 0);
+      const nextBattery = await readBatteryPercent();
+      if (mounted && nextBattery !== null) {
+        setBattery(nextBattery);
       }
     };
-    refreshStatus();
-    const timer = setInterval(refreshStatus, 60000);
-    return () => clearInterval(timer);
+    let batteryLevelSubscription: Battery.Subscription | null = null;
+    let batteryStateSubscription: Battery.Subscription | null = null;
+    try {
+      batteryLevelSubscription = Battery.addBatteryLevelListener((event) => {
+        const nextBattery = batteryPercentFromLevel(event.batteryLevel);
+        if (mounted && nextBattery !== null) {
+          setBattery(nextBattery);
+        }
+      });
+      batteryStateSubscription = Battery.addBatteryStateListener(() => {
+        void refreshStatus();
+      });
+    } catch {
+      batteryLevelSubscription = null;
+      batteryStateSubscription = null;
+    }
+    const retryTimers = [120, 650, 1800, 3500].map((delay) => setTimeout(refreshStatus, delay));
+    const timer = setInterval(refreshStatus, BATTERY_REFRESH_INTERVAL_MS);
+    return () => {
+      mounted = false;
+      retryTimers.forEach(clearTimeout);
+      clearInterval(timer);
+      batteryLevelSubscription?.remove();
+      batteryStateSubscription?.remove();
+    };
   }, []);
 
-  const backgroundColor = readerBackgrounds[settings.background];
+  const backgroundColor = readerBackgroundFor(settings, systemColorScheme);
+  const foregroundColor = readerForegroundFor(settings, systemColorScheme);
+  const readerIsDark = settings.colorScheme === 'dark' || (settings.colorScheme === 'system' && systemColorScheme === 'dark');
+  const toolbarSurface = readerIsDark ? Colors.dark.surface : Colors.light.surface;
+  const toolbarBorder = readerIsDark ? 'rgba(245,245,244,0.16)' : 'rgba(28,25,23,0.16)';
 
   const updateSettings = async (patch: Partial<ReadingSettings>) => {
     const next = { ...settings, ...patch };
@@ -660,6 +714,11 @@ export default function ReaderScreen() {
         setRenderedBlockCount(Math.max(INITIAL_TEXT_BLOCKS, blockIndex + TEXT_BLOCK_INCREMENT * 3));
         setTextScrollRequest({ blockIndex, nonce: Date.now() });
         scheduleProgressSave(nextProgress, block.chapterIndex, block.blockIndex);
+        return;
+      }
+
+      if (currentBook.format === 'pdf') {
+        setPdfSeekRequest({ progress: nextProgress, nonce: Date.now() });
       }
     },
     [epubHtmlBook, scheduleProgressSave, textBlocks]
@@ -694,7 +753,9 @@ export default function ReaderScreen() {
   if (!book) {
     return (
       <SafeAreaView style={[styles.screen, { backgroundColor }]}>
-        <ActivityIndicator color={readerForeground} />
+        <View style={styles.centeredLoader}>
+          <ActivityIndicator color={foregroundColor} />
+        </View>
       </SafeAreaView>
     );
   }
@@ -702,12 +763,13 @@ export default function ReaderScreen() {
   const progressText = `${(displayProgress * 100).toFixed(1)}%`;
   const currentChapterTitle =
     book.format === 'txt' ? chapters[currentChapterIndex]?.title || book.title : epubChapterTitle || book.title;
+  const sheetChapters = chaptersForSheet(book.format, epubToc, chapters);
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor }]}>
-      <StatusBar hidden={!settings.alwaysShowStatusBar} />
+      <StatusBar hidden={!settings.alwaysShowStatusBar} style={readerIsDark ? 'light' : 'dark'} />
       <View style={[styles.readerTop, { backgroundColor }]}>
-        <Text style={styles.chapterTitle} numberOfLines={1}>
+        <Text style={[styles.chapterTitle, { color: foregroundColor }]} numberOfLines={1}>
           {currentChapterTitle}
         </Text>
         <Pressable
@@ -717,7 +779,7 @@ export default function ReaderScreen() {
           pointerEvents={toolbarOpen ? 'auto' : 'none'}
           onPress={closeReader}
           style={[styles.readerCloseButton, !toolbarOpen && styles.readerCloseButtonHidden]}>
-          <X size={22} color={readerForeground} strokeWidth={2.2} />
+          <X size={22} color={foregroundColor} strokeWidth={2.2} />
         </Pressable>
       </View>
 
@@ -728,6 +790,7 @@ export default function ReaderScreen() {
               key={`${book.id}:${epubReaderKey}`}
               book={epubHtmlBook}
               settings={settings}
+              systemColorScheme={systemColorScheme}
               initialIndex={currentChapterIndex}
               initialOffset={book.currentOffset}
               initialProgress={book.progress}
@@ -746,12 +809,15 @@ export default function ReaderScreen() {
               }}
             />
           ) : (
-            <ActivityIndicator color={readerForeground} />
+            <View style={styles.centeredLoader}>
+              <ActivityIndicator color={foregroundColor} />
+            </View>
           )
         ) : book.format === 'epub' ? (
           <EpubPane
             book={book}
             settings={settings}
+            systemColorScheme={systemColorScheme}
             onToc={setEpubToc}
             location={epubLocation}
             readerKey={epubReaderKey}
@@ -767,7 +833,14 @@ export default function ReaderScreen() {
             onDisplayError={handleEpubDisplayError}
           />
         ) : book.format === 'pdf' ? (
-          <PdfPane book={book} onProgress={scheduleProgressSave} onToggleToolbar={toggleToolbar} />
+          <PdfPane
+            key={book.id}
+            book={book}
+            colors={readerIsDark ? Colors.dark : Colors.light}
+            seekRequest={pdfSeekRequest}
+            onProgress={scheduleProgressSave}
+            onToggleToolbar={toggleToolbar}
+          />
         ) : settings.mode === 'scroll' ? (
           <TextScrollPane
             blocks={visibleTextBlocks}
@@ -779,6 +852,7 @@ export default function ReaderScreen() {
             )}
             scrollRequest={textScrollRequest}
             settings={settings}
+            foregroundColor={foregroundColor}
             onLoadMore={() =>
               setRenderedBlockCount((count) => Math.min(Math.max(count, textWindowStart) + TEXT_BLOCK_INCREMENT, textBlocks.length))
             }
@@ -790,6 +864,7 @@ export default function ReaderScreen() {
             book={book}
             chapters={chapters}
             settings={settings}
+            foregroundColor={foregroundColor}
             onProgress={scheduleProgressSave}
             onToggleToolbar={toggleToolbar}
           />
@@ -798,10 +873,10 @@ export default function ReaderScreen() {
 
       <View style={[styles.statusBar, { backgroundColor }]}>
         <View style={styles.statusLeft}>
-          <Text style={styles.statusText}>{time}</Text>
-          <BatteryBadge value={battery} />
+          <Text style={[styles.statusText, { color: foregroundColor }]}>{time}</Text>
+          <BatteryBadge value={battery} color={foregroundColor} />
         </View>
-        <Text style={styles.statusText}>{progressText}</Text>
+        <Text style={[styles.statusText, { color: foregroundColor }]}>{progressText}</Text>
       </View>
 
       {toolbarOpen ? (
@@ -817,8 +892,11 @@ export default function ReaderScreen() {
         <ReaderSheet
           sheet={sheet}
           settings={settingsRef.current}
+          systemColorScheme={systemColorScheme}
+          colors={readerIsDark ? Colors.dark : Colors.light}
           progress={displayProgress}
-          chapters={book.format === 'epub' ? epubToc.map((item, index) => ({ id: item.href, title: item.label || `章节 ${index + 1}`, text: '', href: item.href })) : chapters}
+          chapters={sheetChapters}
+          hasChapters={sheetChapters.length > 0}
           currentChapterIndex={currentChapterIndex}
           currentChapterHref={book.format === 'epub' ? currentEpubHref : undefined}
           onSelectChapter={(index, href) => {
@@ -848,38 +926,43 @@ export default function ReaderScreen() {
           onSettings={updateSettings}
           onStyleChange={guardProgressForStyleChange}
           onSeekProgress={seekToProgress}
+          disabledSheets={book.format === 'pdf' ? ['theme', 'font'] : []}
         />
       ) : null}
 
       {toolbarOpen ? (
-        <View style={styles.toolbar}>
+        <View style={[styles.toolbar, { backgroundColor: toolbarSurface, borderTopColor: toolbarBorder }]}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="目录"
             onPress={() => setSheet('toc')}
             style={[styles.toolbarIconButton, sheet === 'toc' && styles.toolbarIconButtonActive]}>
-            <List size={28} strokeWidth={2.2} color={sheet === 'toc' ? ACTIVE_TOOL_COLOR : readerForeground} />
+            <List size={28} strokeWidth={2.2} color={sheet === 'toc' ? ACTIVE_TOOL_COLOR : foregroundColor} />
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="背景"
+            accessibilityState={{ disabled: book.format === 'pdf' }}
+            disabled={book.format === 'pdf'}
             onPress={() => setSheet('theme')}
-            style={[styles.toolbarIconButton, sheet === 'theme' && styles.toolbarIconButtonActive]}>
-            <Sun size={28} strokeWidth={2.2} color={sheet === 'theme' ? ACTIVE_TOOL_COLOR : readerForeground} />
+            style={[styles.toolbarIconButton, sheet === 'theme' && styles.toolbarIconButtonActive, book.format === 'pdf' && styles.toolbarIconButtonDisabled]}>
+            <Sun size={28} strokeWidth={2.2} color={book.format === 'pdf' ? disabledToolColor(foregroundColor) : sheet === 'theme' ? ACTIVE_TOOL_COLOR : foregroundColor} />
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="进度"
             onPress={() => setSheet('progress')}
             style={[styles.toolbarIconButton, sheet === 'progress' && styles.toolbarIconButtonActive]}>
-            <ProgressToolIcon color={sheet === 'progress' ? ACTIVE_TOOL_COLOR : readerForeground} />
+            <ProgressToolIcon color={sheet === 'progress' ? ACTIVE_TOOL_COLOR : foregroundColor} backgroundColor={toolbarSurface} />
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="字体"
+            accessibilityState={{ disabled: book.format === 'pdf' }}
+            disabled={book.format === 'pdf'}
             onPress={() => setSheet('font')}
-            style={[styles.toolbarIconButton, sheet === 'font' && styles.toolbarIconButtonActive]}>
-            <Type size={30} strokeWidth={2.1} color={sheet === 'font' ? ACTIVE_TOOL_COLOR : readerForeground} />
+            style={[styles.toolbarIconButton, sheet === 'font' && styles.toolbarIconButtonActive, book.format === 'pdf' && styles.toolbarIconButtonDisabled]}>
+            <Type size={30} strokeWidth={2.1} color={book.format === 'pdf' ? disabledToolColor(foregroundColor) : sheet === 'font' ? ACTIVE_TOOL_COLOR : foregroundColor} />
           </Pressable>
         </View>
       ) : null}
@@ -896,6 +979,7 @@ function TextScrollPane({
   initialBlockIndex,
   scrollRequest,
   settings,
+  foregroundColor,
   onLoadMore,
   onProgress,
   onToggleToolbar,
@@ -906,6 +990,7 @@ function TextScrollPane({
   initialBlockIndex: number;
   scrollRequest: TextScrollRequest | null;
   settings: ReadingSettings;
+  foregroundColor: string;
   onLoadMore: () => void;
   onProgress: (progress: number, chapter: number, offset: number) => void;
   onToggleToolbar: () => void;
@@ -969,11 +1054,12 @@ function TextScrollPane({
   const renderItem = useCallback(
     ({ item }: ListRenderItemInfo<TextBlock>) => (
       <View style={styles.chapterBlock}>
-        {item.title ? <Text style={styles.textChapterTitle}>{item.title}</Text> : null}
+        {item.title ? <Text style={[styles.textChapterTitle, { color: foregroundColor }]}>{item.title}</Text> : null}
         <Text
           style={[
             styles.readerText,
             {
+              color: foregroundColor,
               fontSize: settings.fontSize,
               lineHeight: settings.fontSize * settings.lineHeightScale,
               fontFamily: fontFamilyFor(settings.fontFamily),
@@ -983,7 +1069,7 @@ function TextScrollPane({
         </Text>
       </View>
     ),
-    [settings.fontFamily, settings.fontSize, settings.lineHeightScale]
+    [foregroundColor, settings.fontFamily, settings.fontSize, settings.lineHeightScale]
   );
 
   return (
@@ -1050,8 +1136,8 @@ function TextScrollPane({
       ListFooterComponent={
         blocks.length < totalBlocks ? (
           <View style={styles.lazyFooter}>
-            <ActivityIndicator color={readerForeground} />
-            <Text style={styles.lazyFooterText}>继续载入后续章节</Text>
+            <ActivityIndicator color={foregroundColor} />
+            <Text style={[styles.lazyFooterText, { color: foregroundColor }]}>继续载入后续章节</Text>
           </View>
         ) : null
       }
@@ -1105,6 +1191,7 @@ function splitTextForVirtualList(text: string) {
 function EpubScrollPane({
   book,
   settings,
+  systemColorScheme,
   initialIndex,
   initialOffset,
   initialProgress,
@@ -1116,6 +1203,7 @@ function EpubScrollPane({
 }: {
   book: EpubHtmlBook;
   settings: ReadingSettings;
+  systemColorScheme?: 'light' | 'dark' | null;
   initialIndex: number;
   initialOffset: number;
   initialProgress: number;
@@ -1131,8 +1219,16 @@ function EpubScrollPane({
   const initialProgressRef = useRef(initialProgress);
   const initialSettingsRef = useRef(settings);
   const html = useMemo(
-    () => createEpubScrollHtml(book, initialSettingsRef.current, initialIndexRef.current, initialOffsetRef.current, initialProgressRef.current),
-    [book]
+    () =>
+      createEpubScrollHtml(
+        book,
+        initialSettingsRef.current,
+        systemColorScheme,
+        initialIndexRef.current,
+        initialOffsetRef.current,
+        initialProgressRef.current
+      ),
+    [book, systemColorScheme]
   );
   const source = useMemo(() => ({ html }), [html]);
 
@@ -1165,8 +1261,8 @@ function EpubScrollPane({
   }, [book.chapters.length, seekRequest]);
 
   useEffect(() => {
-    webViewRef.current?.injectJavaScript(createEpubSettingsScript(settings));
-  }, [settings]);
+    webViewRef.current?.injectJavaScript(createEpubSettingsScript(settings, systemColorScheme));
+  }, [settings, systemColorScheme]);
 
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -1202,18 +1298,20 @@ function EpubScrollPane({
       scrollEnabled
       showsVerticalScrollIndicator={!settings.hideScrollbar}
       onMessage={handleMessage}
-      style={{ backgroundColor: readerBackgrounds[settings.background] }}
+      style={{ backgroundColor: readerBackgroundFor(settings, systemColorScheme) }}
     />
   );
 }
 
-function createEpubCssVars(settings: ReadingSettings) {
+function createEpubCssVars(settings: ReadingSettings, systemColorScheme?: 'light' | 'dark' | null) {
   const padding = Math.round(18 + settings.paddingScale * 18);
-  const background = readerBackgrounds[settings.background];
+  const background = readerBackgroundFor(settings, systemColorScheme);
+  const foreground = readerForegroundFor(settings, systemColorScheme);
   const fontFamily = settings.fontFamily === 'serif' ? 'serif' : settings.fontFamily === 'mono' ? 'monospace' : 'sans-serif';
 
   return {
     background,
+    foreground,
     fontFamily,
     fontSize: `${settings.fontSize}px`,
     lineHeight: String(settings.lineHeightScale),
@@ -1221,8 +1319,8 @@ function createEpubCssVars(settings: ReadingSettings) {
   };
 }
 
-function createEpubSettingsScript(settings: ReadingSettings) {
-  const vars = createEpubCssVars(settings);
+function createEpubSettingsScript(settings: ReadingSettings, systemColorScheme?: 'light' | 'dark' | null) {
+  const vars = createEpubCssVars(settings, systemColorScheme);
   return `
     setTimeout(function () {
       if (!window.PointReader || !window.PointReader.applySettings) return;
@@ -1232,11 +1330,18 @@ function createEpubSettingsScript(settings: ReadingSettings) {
   `;
 }
 
-function createEpubScrollHtml(book: EpubHtmlBook, settings: ReadingSettings, initialIndex: number, initialOffset: number, initialProgress: number) {
+function createEpubScrollHtml(
+  book: EpubHtmlBook,
+  settings: ReadingSettings,
+  systemColorScheme: 'light' | 'dark' | null | undefined,
+  initialIndex: number,
+  initialOffset: number,
+  initialProgress: number
+) {
   const safeInitialIndex = Math.max(0, Math.min(initialIndex, Math.max(0, book.chapters.length - 1)));
   const safeInitialOffset = initialOffset > 0 && initialOffset <= 1 ? initialOffset : 0;
   const safeInitialProgress = clamp(initialProgress, 0, 1);
-  const vars = createEpubCssVars(settings);
+  const vars = createEpubCssVars(settings, systemColorScheme);
 
   return `<!doctype html>
 <html>
@@ -1244,8 +1349,8 @@ function createEpubScrollHtml(book: EpubHtmlBook, settings: ReadingSettings, ini
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <style>
 ${book.css}
-:root { --reader-bg: ${vars.background}; --reader-font-family: ${vars.fontFamily}; --reader-font-size: ${vars.fontSize}; --reader-line-height: ${vars.lineHeight}; --reader-padding: ${vars.padding}; }
-html, body { margin: 0; padding: 0; background: var(--reader-bg); color: ${readerForeground}; font-family: var(--reader-font-family); }
+:root { --reader-bg: ${vars.background}; --reader-fg: ${vars.foreground}; --reader-font-family: ${vars.fontFamily}; --reader-font-size: ${vars.fontSize}; --reader-line-height: ${vars.lineHeight}; --reader-padding: ${vars.padding}; }
+html, body { margin: 0; padding: 0; background: var(--reader-bg); color: var(--reader-fg); font-family: var(--reader-font-family); }
 body { -webkit-text-size-adjust: none; }
 #root { min-height: 100vh; }
 .chapter { box-sizing: border-box; padding: 24px var(--reader-padding) 40px; font-size: var(--reader-font-size); line-height: var(--reader-line-height); overflow-wrap: anywhere; }
@@ -1517,11 +1622,13 @@ body { -webkit-text-size-adjust: none; }
     isMutating = true;
     var style = document.documentElement.style;
     style.setProperty('--reader-bg', vars.background);
+    style.setProperty('--reader-fg', vars.foreground);
     style.setProperty('--reader-font-family', vars.fontFamily);
     style.setProperty('--reader-font-size', vars.fontSize);
     style.setProperty('--reader-line-height', vars.lineHeight);
     style.setProperty('--reader-padding', vars.padding);
     document.body.style.background = vars.background;
+    document.body.style.color = vars.foreground;
     restoreAnchor(anchor);
   }
 
@@ -1604,6 +1711,7 @@ body { -webkit-text-size-adjust: none; }
 const EpubPane = memo(function EpubPane({
   book,
   settings,
+  systemColorScheme,
   location,
   readerKey,
   onToc,
@@ -1615,6 +1723,7 @@ const EpubPane = memo(function EpubPane({
 }: {
   book: Book;
   settings: ReadingSettings;
+  systemColorScheme?: 'light' | 'dark' | null;
   location?: string;
   readerKey: number;
   onToc: (toc: Toc) => void;
@@ -1624,8 +1733,8 @@ const EpubPane = memo(function EpubPane({
   onImagePress: (uri: string) => void;
   onDisplayError: () => void;
 }) {
-  const defaultTheme = useMemo(() => createReaderTheme(settings), [settings]);
-  const { goToLocation } = useReader();
+  const defaultTheme = useMemo(() => createReaderTheme(settings, systemColorScheme), [settings, systemColorScheme]);
+  const { goNext, goPrevious, goToLocation } = useReader();
   const epubOpenedRef = useRef(false);
   const restoringUntilRef = useRef(0);
 
@@ -1645,12 +1754,27 @@ const EpubPane = memo(function EpubPane({
   }, [location, onDisplayError, readerKey]);
 
   const handleWebViewMessage = useCallback(
-    (event: { type?: string; src?: unknown; progress?: unknown; location?: unknown }) => {
+    (event: { type?: string; src?: unknown; progress?: unknown; location?: unknown; x?: unknown; width?: unknown }) => {
       if (event.type === 'point-reader:image-preview' && typeof event.src === 'string') {
         onImagePress(event.src);
       }
       if (event.type === 'point-reader:content-tap') {
-        onToggleToolbar();
+        if (settings.mode !== 'tap') {
+          onToggleToolbar();
+          return;
+        }
+        const action = tapZoneAction(
+          typeof event.x === 'number' ? event.x : Number.NaN,
+          typeof event.width === 'number' ? event.width : Number.NaN,
+          settings.swapTapZones
+        );
+        if (action === 'previous') {
+          goPrevious();
+        } else if (action === 'next') {
+          goNext();
+        } else {
+          onToggleToolbar();
+        }
       }
       if (event.type === 'point-reader:reader-error') {
         console.warn('[PointReader EPUB]', event);
@@ -1665,7 +1789,7 @@ const EpubPane = memo(function EpubPane({
         }
       }
     },
-    [onImagePress, onProgress, onToggleToolbar, settings.mode]
+    [goNext, goPrevious, onImagePress, onProgress, onToggleToolbar, settings.mode, settings.swapTapZones]
   );
 
   return (
@@ -1703,7 +1827,6 @@ const EpubPane = memo(function EpubPane({
       }}
       injectedJavascript={EPUB_IMAGE_PREVIEW_SCRIPT}
       onWebViewMessage={handleWebViewMessage}
-      onSingleTap={onToggleToolbar}
     />
   );
 });
@@ -1711,6 +1834,64 @@ const EpubPane = memo(function EpubPane({
 function normalizeEpubProgress(progress: number) {
   if (!Number.isFinite(progress)) return 0;
   return progress > 1 ? progress / 100 : progress;
+}
+
+function disabledToolColor(color: string) {
+  return color.startsWith('#') ? `${color}66` : 'rgba(120,120,120,0.45)';
+}
+
+function chaptersForSheet(format: Book['format'], epubToc: Toc, chapters: ReaderChapter[]) {
+  if (format === 'epub') {
+    return epubToc
+      .map((item) => ({
+        id: item.href,
+        title: (item.label || '').trim(),
+        text: '',
+        href: item.href,
+      }))
+      .filter((chapter) => chapter.title.length > 0 || Boolean(chapter.href));
+  }
+
+  if (format === 'txt') {
+    return chapters.filter((chapter) => chapter.title.trim().length > 0 || chapter.text.trim().length > 0);
+  }
+
+  return [];
+}
+
+function batteryPercentFromLevel(level: number) {
+  if (!Number.isFinite(level) || level < 0) return null;
+  return Math.round(clamp(level, 0, 1) * 100);
+}
+
+async function readBatteryPercent() {
+  try {
+    const powerState = await Battery.getPowerStateAsync();
+    const powerStatePercent = batteryPercentFromLevel(powerState.batteryLevel);
+    if (powerStatePercent !== null) return powerStatePercent;
+  } catch {
+    // Fall through to the narrower API below.
+  }
+
+  try {
+    return batteryPercentFromLevel(await Battery.getBatteryLevelAsync());
+  } catch {
+    return null;
+  }
+}
+
+function tapZoneAction(x: number, width: number, swapTapZones: boolean): TapZoneAction {
+  if (!Number.isFinite(x) || !Number.isFinite(width) || width <= 0) {
+    return 'toolbar';
+  }
+  const ratio = x / width;
+  if (ratio < TAP_ZONE_EDGE_RATIO) {
+    return swapTapZones ? 'next' : 'previous';
+  }
+  if (ratio > 1 - TAP_ZONE_EDGE_RATIO) {
+    return swapTapZones ? 'previous' : 'next';
+  }
+  return 'toolbar';
 }
 
 function isLikelyCoverLocation(location?: Location | null) {
@@ -1800,17 +1981,20 @@ function TapTextPane({
   book,
   chapters,
   settings,
+  foregroundColor,
   onProgress,
   onToggleToolbar,
 }: {
   book: Book;
   chapters: ReaderChapter[];
   settings: ReadingSettings;
+  foregroundColor: string;
   onProgress: (progress: number, chapter: number, offset: number) => void;
   onToggleToolbar: () => void;
 }) {
   const [index, setIndex] = useState(book.currentChapter);
   const chapter = chapters[index] ?? chapters[0];
+  const { width } = useWindowDimensions();
   const isDragging = useRef(false);
   const touchStart = useRef({ x: 0, y: 0 });
 
@@ -1835,7 +2019,14 @@ function TapTextPane({
           const dx = Math.abs(event.nativeEvent.pageX - touchStart.current.x);
           const dy = Math.abs(event.nativeEvent.pageY - touchStart.current.y);
           if (!isDragging.current && dx < 8 && dy < 8) {
-            onToggleToolbar();
+            const action = tapZoneAction(event.nativeEvent.pageX, width, settings.swapTapZones);
+            if (action === 'previous') {
+              move(-1);
+            } else if (action === 'next') {
+              move(1);
+            } else {
+              onToggleToolbar();
+            }
           }
         }}
         onScrollBeginDrag={() => {
@@ -1854,11 +2045,12 @@ function TapTextPane({
             isDragging.current = false;
           }, 120);
         }}>
-        <Text style={styles.textChapterTitle}>{chapter?.title}</Text>
+        <Text style={[styles.textChapterTitle, { color: foregroundColor }]}>{chapter?.title}</Text>
         <Text
           style={[
             styles.readerText,
             {
+              color: foregroundColor,
               fontSize: settings.fontSize,
               lineHeight: settings.fontSize * settings.lineHeightScale,
               fontFamily: fontFamilyFor(settings.fontFamily),
@@ -1874,14 +2066,14 @@ function TapTextPane({
             accessibilityLabel="上一章"
             onPress={() => move(settings.swapTapZones ? 1 : -1)}
             style={styles.pageButton}>
-            <ChevronLeft size={24} color={readerForeground} />
+            <ChevronLeft size={24} color={foregroundColor} />
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="下一章"
             onPress={() => move(settings.swapTapZones ? -1 : 1)}
             style={styles.pageButton}>
-            <ChevronRight size={24} color={readerForeground} />
+            <ChevronRight size={24} color={foregroundColor} />
           </Pressable>
         </View>
       ) : null}
@@ -1892,8 +2084,12 @@ function TapTextPane({
 function ReaderSheet({
   sheet,
   settings,
+  systemColorScheme,
+  colors,
+  disabledSheets = [],
   progress,
   chapters,
+  hasChapters,
   currentChapterIndex,
   currentChapterHref,
   onSelectChapter,
@@ -1903,8 +2099,12 @@ function ReaderSheet({
 }: {
   sheet: 'toc' | 'theme' | 'progress' | 'font';
   settings: ReadingSettings;
+  systemColorScheme?: 'light' | 'dark' | null;
+  colors: AppColors;
+  disabledSheets?: ('theme' | 'font')[];
   progress: number;
   chapters: ReaderChapter[];
+  hasChapters: boolean;
   currentChapterIndex: number;
   currentChapterHref?: string;
   onSelectChapter: (index: number, href?: string) => void;
@@ -1915,6 +2115,8 @@ function ReaderSheet({
   const { changeTheme, injectJavascript } = useReader();
   const [localSettings, setLocalSettings] = useState(settings);
   const tocListRef = useRef<ScrollView>(null);
+  const themeDisabled = disabledSheets.includes('theme');
+  const fontDisabled = disabledSheets.includes('font');
 
   useEffect(() => {
     setLocalSettings(settings);
@@ -1925,7 +2127,7 @@ function ReaderSheet({
     setLocalSettings(nextSettings);
     onStyleChange();
     onSettings(patch);
-    changeTheme(createReaderTheme(nextSettings));
+    changeTheme(createReaderTheme(nextSettings, systemColorScheme));
   };
 
   const applyFontSettings = (patch: Partial<ReadingSettings>) => {
@@ -1933,11 +2135,11 @@ function ReaderSheet({
     setLocalSettings(nextSettings);
     onStyleChange();
     onSettings(patch);
-    changeTheme(createReaderTheme(nextSettings));
+    changeTheme(createReaderTheme(nextSettings, systemColorScheme));
   };
 
   useEffect(() => {
-    if (sheet !== 'toc' || !chapters.length) return;
+    if (sheet !== 'toc' || !hasChapters || !chapters.length) return;
     const hrefIndex = currentChapterHref
       ? chapters.findIndex((chapter) => isSameEpubHref(chapter.href, currentChapterHref))
       : -1;
@@ -1949,13 +2151,14 @@ function ReaderSheet({
       });
     }, 0);
     return () => clearTimeout(timer);
-  }, [chapters, currentChapterHref, currentChapterIndex, sheet]);
+  }, [chapters, currentChapterHref, currentChapterIndex, hasChapters, sheet]);
 
   return (
-    <View style={styles.sheet}>
+    <View style={[styles.sheet, { backgroundColor: colors.surface }]}>
       {sheet === 'toc' ? (
-        <ScrollView ref={tocListRef} style={styles.tocList}>
-          {chapters.map((chapter, index) => {
+        hasChapters ? (
+          <ScrollView ref={tocListRef} style={styles.tocList}>
+            {chapters.map((chapter, index) => {
             const isCurrent = currentChapterHref
               ? isSameEpubHref(chapter.href, currentChapterHref)
               : index === currentChapterIndex;
@@ -2036,16 +2239,21 @@ function ReaderSheet({
                   }
                   onSelectChapter(index, targetHref || chapter.href);
                 }}
-                style={[styles.tocItem, isCurrent && styles.tocItemCurrent]}>
-                <Text style={[styles.tocTitle, isCurrent && styles.tocTitleCurrent]} numberOfLines={2}>
+                style={[styles.tocItem, { borderBottomColor: colors.backgroundElement }, isCurrent && { backgroundColor: colors.backgroundElement }]}>
+                <Text style={[styles.tocTitle, { color: colors.text }, isCurrent && styles.tocTitleCurrent]} numberOfLines={2}>
                   {chapter.title}
                 </Text>
               </Pressable>
             );
-          })}
-        </ScrollView>
+            })}
+          </ScrollView>
+        ) : (
+          <View style={styles.emptyToc}>
+            <Text style={[styles.emptyTocText, { color: colors.textSecondary }]}>暂无章节信息</Text>
+          </View>
+        )
       ) : null}
-      {sheet === 'theme' ? (
+      {sheet === 'theme' && !themeDisabled ? (
         <View style={styles.swatches}>
           {(['white', 'gray', 'yellow', 'green'] as ReadingSettings['background'][]).map((name) => (
             <Pressable
@@ -2058,7 +2266,8 @@ function ReaderSheet({
               style={[
                 styles.swatch,
                 { backgroundColor: readerBackgrounds[name] },
-                localSettings.background === name && styles.swatchSelected,
+                { borderColor: colors.border },
+                localSettings.background === name && [styles.swatchSelected, { borderColor: colors.text }],
               ]}
             />
           ))}
@@ -2066,6 +2275,7 @@ function ReaderSheet({
       ) : null}
       {sheet === 'progress' ? (
         <ProgressPanel
+          colors={colors}
           progress={progress}
           onSeek={onSeekProgress}
           onPreviousChapter={() => {
@@ -2080,9 +2290,10 @@ function ReaderSheet({
           }}
         />
       ) : null}
-      {sheet === 'font' ? (
+      {sheet === 'font' && !fontDisabled ? (
         <View style={styles.fontPanel}>
           <ReaderMetricControl
+            colors={colors}
             value={localSettings.fontSize}
             min={16}
             max={32}
@@ -2095,6 +2306,7 @@ function ReaderSheet({
           />
           <View style={styles.metricGrid}>
             <ReaderMetricControl
+              colors={colors}
               value={localSettings.paddingScale}
               min={0.5}
               max={1.8}
@@ -2108,6 +2320,7 @@ function ReaderSheet({
               onValue={(value) => applyFontSettings({ paddingScale: value })}
             />
             <ReaderMetricControl
+              colors={colors}
               value={localSettings.lineHeightScale}
               min={1.2}
               max={1.9}
@@ -2129,97 +2342,130 @@ function ReaderSheet({
 
 function ProgressPanel({
   progress,
+  colors,
   onSeek,
   onPreviousChapter,
   onNextChapter,
 }: {
   progress: number;
+  colors: AppColors;
   onSeek: (progress: number) => void;
   onPreviousChapter: () => void;
   onNextChapter: () => void;
 }) {
   const undoProgress = useRef<number | null>(null);
   const redoProgress = useRef<number | null>(null);
+  const currentProgress = useRef(progress);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  useEffect(() => {
+    currentProgress.current = progress;
+  }, [progress]);
 
   const commitSeek = useCallback(
     (nextProgress: number) => {
-      undoProgress.current = progress;
+      const clampedProgress = clamp(nextProgress, 0, 1);
+      undoProgress.current = currentProgress.current;
       redoProgress.current = null;
-      onSeek(clamp(nextProgress, 0, 1));
+      currentProgress.current = clampedProgress;
+      setCanUndo(true);
+      setCanRedo(false);
+      onSeek(clampedProgress);
     },
-    [onSeek, progress]
+    [onSeek]
   );
 
   const seekBy = useCallback(
     (delta: number) => {
-      commitSeek(progress + delta);
+      commitSeek(currentProgress.current + delta);
     },
-    [commitSeek, progress]
+    [commitSeek]
   );
 
   const undo = useCallback(() => {
     if (undoProgress.current === null) return;
-    redoProgress.current = progress;
+    redoProgress.current = currentProgress.current;
     const target = undoProgress.current;
     undoProgress.current = null;
+    currentProgress.current = target;
+    setCanUndo(false);
+    setCanRedo(true);
     onSeek(target);
-  }, [onSeek, progress]);
+  }, [onSeek]);
 
   const redo = useCallback(() => {
     if (redoProgress.current === null) return;
-    undoProgress.current = progress;
+    undoProgress.current = currentProgress.current;
     const target = redoProgress.current;
     redoProgress.current = null;
+    currentProgress.current = target;
+    setCanUndo(true);
+    setCanRedo(false);
     onSeek(target);
-  }, [onSeek, progress]);
+  }, [onSeek]);
 
   const jumpChapter = useCallback(
     (direction: -1 | 1) => {
-      undoProgress.current = progress;
+      undoProgress.current = currentProgress.current;
       redoProgress.current = null;
+      setCanUndo(true);
+      setCanRedo(false);
       if (direction < 0) onPreviousChapter();
       else onNextChapter();
     },
-    [onNextChapter, onPreviousChapter, progress]
+    [onNextChapter, onPreviousChapter]
   );
 
   return (
     <View style={styles.progressPanel}>
-      <ReaderProgressControl value={progress} onValue={commitSeek} />
+      <ReaderProgressControl value={progress} colors={colors} onValue={commitSeek} />
       <View style={styles.progressActions}>
         <Pressable accessibilityRole="button" accessibilityLabel="上一章" onPress={() => jumpChapter(-1)} style={styles.progressActionButton}>
-          <ChevronsLeft size={28} color={readerForeground} strokeWidth={2.6} />
+          <ChevronsLeft size={28} color={colors.text} strokeWidth={2.6} />
         </Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="后退一点" onPress={() => seekBy(-0.01)} style={styles.progressActionButton}>
-          <ChevronLeft size={30} color={readerForeground} strokeWidth={2.6} />
+          <ChevronLeft size={30} color={colors.text} strokeWidth={2.6} />
         </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="撤销跳转" onPress={undo} style={styles.progressActionButton}>
-          <RotateCcw size={30} color="rgba(28,25,23,0.48)" strokeWidth={2.4} />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="撤销跳转"
+          accessibilityState={{ disabled: !canUndo }}
+          disabled={!canUndo}
+          onPress={undo}
+          style={styles.progressActionButton}>
+          <RotateCcw size={30} color={canUndo ? colors.text : colors.textSecondary} strokeWidth={2.4} />
         </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="重做跳转" onPress={redo} style={styles.progressActionButton}>
-          <RotateCw size={30} color={readerForeground} strokeWidth={2.4} />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="重做跳转"
+          accessibilityState={{ disabled: !canRedo }}
+          disabled={!canRedo}
+          onPress={redo}
+          style={styles.progressActionButton}>
+          <RotateCw size={30} color={canRedo ? colors.text : colors.textSecondary} strokeWidth={2.4} />
         </Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="前进一点" onPress={() => seekBy(0.01)} style={styles.progressActionButton}>
-          <ChevronRight size={30} color={readerForeground} strokeWidth={2.6} />
+          <ChevronRight size={30} color={colors.text} strokeWidth={2.6} />
         </Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="下一章" onPress={() => jumpChapter(1)} style={styles.progressActionButton}>
-          <ChevronsRight size={28} color={readerForeground} strokeWidth={2.6} />
+          <ChevronsRight size={28} color={colors.text} strokeWidth={2.6} />
         </Pressable>
       </View>
     </View>
   );
 }
 
-function ProgressToolIcon({ color }: { color: string }) {
+function ProgressToolIcon({ color, backgroundColor }: { color: string; backgroundColor: string }) {
   return (
     <View style={styles.progressToolIcon} accessibilityElementsHidden>
       <View style={[styles.progressToolIconLine, { backgroundColor: color }]} />
-      <View style={[styles.progressToolIconKnob, { borderColor: color }]} />
+      <View style={[styles.progressToolIconKnob, { borderColor: color, backgroundColor }]} />
     </View>
   );
 }
 
-function ReaderProgressControl({ value, onValue }: { value: number; onValue: (value: number) => void }) {
+function ReaderProgressControl({ value, colors, onValue }: { value: number; colors: AppColors; onValue: (value: number) => void }) {
   const [trackWidth, setTrackWidth] = useState(0);
   const [localValue, setLocalValue] = useState(value);
   const localValueRef = useRef(value);
@@ -2312,186 +2558,25 @@ function ReaderProgressControl({ value, onValue }: { value: number; onValue: (va
         setTrackWidth(event.nativeEvent.layout.width);
         updateControlPageX();
       }}
-      style={styles.progressTrack}
+      style={[styles.progressTrack, { backgroundColor: colors.backgroundElement }]}
       {...panResponder.panHandlers}>
-      <View pointerEvents="none" style={[styles.progressTrackFill, { width: trackWidth ? thumbLeft + thumbWidth / 2 : 0 }]} />
-      <View pointerEvents="none" style={[styles.progressThumb, trackWidth > 0 && { left: thumbLeft, width: thumbWidth }]}>
-        <Text style={styles.progressThumbText}>{`${Math.round(localValue * 100)}%`}</Text>
+      <View pointerEvents="none" style={[styles.progressTrackFill, { backgroundColor: colors.backgroundSelected, width: trackWidth ? thumbLeft + thumbWidth / 2 : 0 }]} />
+      <View pointerEvents="none" style={[styles.progressThumb, { backgroundColor: colors.surface, shadowColor: colors.text }, trackWidth > 0 && { left: thumbLeft, width: thumbWidth }]}>
+        <Text style={[styles.progressThumbText, { color: colors.text }]}>{`${Math.round(localValue * 100)}%`}</Text>
       </View>
     </View>
   );
 }
 
-function ReaderMetricControl({
-  value,
-  min,
-  max,
-  step,
-  leftLabel,
-  rightLabel,
-  valueLabel,
-  icon: Icon,
-  accessibilityLabel,
-  compact,
-  onValue,
-}: {
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  leftLabel: string;
-  rightLabel: string;
-  valueLabel: string;
-  icon?: LucideIcon;
-  accessibilityLabel: string;
-  compact?: boolean;
-  onValue: (value: number) => void;
-}) {
-  const [trackWidth, setTrackWidth] = useState(0);
-  const [localValue, setLocalValue] = useState(value);
-  const localValueRef = useRef(value);
-  const dragging = useRef(false);
-  const controlRef = useRef<View>(null);
-  const controlPageX = useRef(0);
-  const thumbWidth = compact ? 48 : 64;
-  const travelWidth = Math.max(1, trackWidth - thumbWidth);
-  const progress = trackWidth ? (localValue - min) / (max - min) : 0;
-  const thumbLeft = clamp(progress, 0, 1) * travelWidth;
-
-  useEffect(() => {
-    if (dragging.current) return;
-    localValueRef.current = value;
-    setLocalValue(value);
-  }, [value]);
-
-  const normalizeValue = useCallback(
-    (rawValue: number) => {
-      const multiplier = Math.round(1 / step);
-      return clamp(Math.round(rawValue * multiplier) / multiplier, min, max);
-    },
-    [max, min, step]
-  );
-
-  const setDraftValue = useCallback((nextValue: number) => {
-    const normalized = normalizeValue(nextValue);
-    localValueRef.current = normalized;
-    setLocalValue(normalized);
-  }, [normalizeValue]);
-
-  const commitValue = useCallback((nextValue = localValueRef.current) => {
-    const normalized = normalizeValue(nextValue);
-    localValueRef.current = normalized;
-    setLocalValue(normalized);
-    onValue(normalized);
-  }, [normalizeValue, onValue]);
-
-  const updateValue = useCallback((direction: -1 | 1) => {
-    const multiplier = Math.round(1 / step);
-    const next = Math.round((localValueRef.current + direction * step) * multiplier) / multiplier;
-    commitValue(clamp(next, min, max));
-  }, [commitValue, max, min, step]);
-
-  const updateValueFromTrackX = useCallback(
-    (x: number) => {
-      if (!trackWidth) return;
-      const ratio = clamp((x - thumbWidth / 2) / travelWidth, 0, 1);
-      setDraftValue(min + ratio * (max - min));
-    },
-    [max, min, setDraftValue, thumbWidth, trackWidth, travelWidth]
-  );
-
-  const updateControlPageX = useCallback(() => {
-    controlRef.current?.measureInWindow((x) => {
-      controlPageX.current = x;
-    });
-  }, []);
-
-  const updateValueFromPageX = useCallback(
-    (pageX: number) => {
-      updateValueFromTrackX(pageX - controlPageX.current);
-    },
-    [updateValueFromTrackX]
-  );
-
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onStartShouldSetPanResponderCapture: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponderCapture: () => true,
-        onShouldBlockNativeResponder: () => true,
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderGrant: (event) => {
-          dragging.current = true;
-          controlRef.current?.measureInWindow((x) => {
-            controlPageX.current = x;
-            updateValueFromPageX(event.nativeEvent.pageX);
-          });
-        },
-        onPanResponderMove: (_, gestureState) => {
-          if (!trackWidth) return;
-          updateValueFromPageX(gestureState.moveX);
-        },
-        onPanResponderRelease: () => {
-          dragging.current = false;
-          commitValue();
-        },
-        onPanResponderTerminate: () => {
-          dragging.current = false;
-          commitValue();
-        },
-      }),
-    [commitValue, trackWidth, updateValueFromPageX]
-  );
-
-  return (
-    <View
-      ref={controlRef}
-      style={[styles.metricControl, compact && styles.metricControlCompact]}
-      onLayout={(event) => {
-        setTrackWidth(event.nativeEvent.layout.width);
-        updateControlPageX();
-      }}
-      {...panResponder.panHandlers}>
-      <View pointerEvents="none" style={styles.metricTrackLabels}>
-        <Text style={[styles.metricSideText, compact && styles.metricSideTextCompact]}>{leftLabel}</Text>
-        <Text style={[styles.metricSideText, styles.metricSideTextLarge, compact && styles.metricSideTextCompact]}>{rightLabel}</Text>
-      </View>
-      <View
-        accessibilityRole="adjustable"
-        accessibilityLabel={accessibilityLabel}
-        accessibilityValue={{ text: valueLabel }}
-        onAccessibilityAction={(event) => {
-          if (event.nativeEvent.actionName === 'increment') updateValue(1);
-          if (event.nativeEvent.actionName === 'decrement') updateValue(-1);
-        }}
-        accessibilityActions={[
-          { name: 'increment', label: '增大' },
-          { name: 'decrement', label: '减小' },
-        ]}
-        style={[
-          styles.metricThumb,
-          compact && styles.metricThumbCompact,
-          trackWidth > 0 && { left: thumbLeft, width: thumbWidth },
-        ]}>
-        {Icon ? <Icon size={compact ? 17 : 19} color={Colors.light.text} strokeWidth={2.4} /> : null}
-        {!compact ? <Text style={styles.metricThumbText}>{String(Math.round(localValue))}</Text> : null}
-      </View>
-    </View>
-  );
-}
-
-function BatteryBadge({ value }: { value: number | null }) {
-  const normalizedValue = Math.round(clamp(value ?? 0, 0, 100));
-  const batteryText = String(normalizedValue);
+function BatteryBadge({ value, color }: { value: number | null; color: string }) {
+  const batteryText = value === null ? '--' : String(Math.round(clamp(value, 0, 100)));
 
   return (
     <View style={styles.batteryBadge} accessibilityLabel={`电量 ${value === null ? '未知' : `${value}%`}`}>
-      <View style={styles.batteryBody}>
-        <Text style={styles.batteryBadgeText}>{batteryText}</Text>
+      <View style={[styles.batteryBody, { borderColor: color }]}>
+        <Text style={[styles.batteryBadgeText, { color }]}>{batteryText}</Text>
       </View>
-      <View style={styles.batteryCap} />
+      <View style={[styles.batteryCap, { borderColor: color }]} />
     </View>
   );
 }
@@ -2666,6 +2751,11 @@ const styles = StyleSheet.create({
   readerBody: {
     flex: 1,
   },
+  centeredLoader: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   textContent: {
     paddingTop: Spacing.four,
     paddingBottom: Spacing.five,
@@ -2784,6 +2874,9 @@ const styles = StyleSheet.create({
   toolbarIconButtonActive: {
     backgroundColor: 'transparent',
   },
+  toolbarIconButtonDisabled: {
+    opacity: 0.42,
+  },
   progressToolIcon: {
     position: 'relative',
     width: 31,
@@ -2819,6 +2912,16 @@ const styles = StyleSheet.create({
   },
   tocList: {
     maxHeight: 320,
+  },
+  emptyToc: {
+    minHeight: 132,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyTocText: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '700',
   },
   tocItem: {
     minHeight: TouchTarget,
@@ -2910,75 +3013,6 @@ const styles = StyleSheet.create({
   metricGrid: {
     flexDirection: 'row',
     gap: Spacing.four,
-  },
-  metricControl: {
-    position: 'relative',
-    minHeight: 48,
-    borderRadius: 24,
-    backgroundColor: Colors.light.backgroundElement,
-    flexDirection: 'row',
-    alignItems: 'center',
-    overflow: 'visible',
-  },
-  metricControlCompact: {
-    flex: 1,
-    minHeight: 46,
-    borderRadius: 23,
-  },
-  metricTrackLabels: {
-    ...StyleSheet.absoluteFillObject,
-    paddingHorizontal: Spacing.three,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  metricSideText: {
-    fontSize: 21,
-    lineHeight: 25,
-    fontWeight: '400',
-    color: Colors.light.text,
-  },
-  metricSideTextLarge: {
-    fontSize: 27,
-    lineHeight: 31,
-  },
-  metricSideTextCompact: {
-    fontSize: 18,
-    lineHeight: 22,
-    fontWeight: '400',
-  },
-  metricThumb: {
-    position: 'absolute',
-    top: 0,
-    minWidth: 64,
-    height: 48,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: Colors.light.backgroundElement,
-    backgroundColor: Colors.light.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: Spacing.one,
-    shadowColor: Colors.light.text,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  metricThumbCompact: {
-    minWidth: 48,
-    height: 46,
-    borderRadius: 23,
-  },
-  metricThumbText: {
-    fontSize: 17,
-    lineHeight: 21,
-    fontWeight: '500',
-    color: Colors.light.text,
-  },
-  metricPressed: {
-    opacity: 0.62,
   },
   tapPane: {
     flex: 1,

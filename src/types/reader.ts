@@ -1,6 +1,7 @@
 export type BookFormat = 'epub' | 'txt' | 'pdf';
 export type ImportSource = 'local' | 'webdav';
 export type ReadingMode = 'scroll' | 'tap';
+export type ReaderColorScheme = 'light' | 'dark' | 'system';
 export type SortField = 'updatedAt' | 'title' | 'author' | 'progress';
 export type SortDirection = 'asc' | 'desc';
 
@@ -22,6 +23,7 @@ export type Book = {
 
 export type ReadingSettings = {
   mode: ReadingMode;
+  colorScheme: ReaderColorScheme;
   hideScrollbar: boolean;
   swapTapZones: boolean;
   volumeTurnPage: boolean;

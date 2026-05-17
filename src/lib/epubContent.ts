@@ -1,6 +1,7 @@
-import * as FileSystem from 'expo-file-system/legacy';
 import { unzipSync } from 'fflate';
 import { XMLParser } from 'fast-xml-parser';
+
+import { normalizeZipPath, readFileAsBytes, readZipText, uint8ToBase64 } from '@/lib/epubBinary';
 
 export type EpubHtmlChapter = {
   id: string;
@@ -18,8 +19,6 @@ const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '',
 });
-
-const textDecoder = new TextDecoder();
 
 export async function loadEpubHtmlBook(fileUri: string): Promise<EpubHtmlBook> {
   const bytes = await readFileAsBytes(fileUri);
@@ -118,26 +117,11 @@ function rewriteResourceLinks(html: string, zip: Record<string, Uint8Array>, sou
   });
 }
 
-function readZipText(zip: Record<string, Uint8Array>, path: string) {
-  const file = zip[normalizeZipPath(path)];
-  return file ? textDecoder.decode(file) : '';
-}
-
 function findRootfilePath(containerXml: string) {
   if (!containerXml) return null;
   const container = parser.parse(containerXml);
   const rootfiles = toArray<any>(container.container?.rootfiles?.rootfile);
   return rootfiles[0]?.['full-path'] ?? null;
-}
-
-function normalizeZipPath(path: string) {
-  const parts: string[] = [];
-  for (const part of path.split('/')) {
-    if (!part || part === '.') continue;
-    if (part === '..') parts.pop();
-    else parts.push(part);
-  }
-  return parts.join('/');
 }
 
 function normalizeHrefKey(href: string) {
@@ -169,57 +153,4 @@ function mimeTypeForPath(path: string) {
   if (ext === 'webp') return 'image/webp';
   if (ext === 'css') return 'text/css';
   return null;
-}
-
-async function readFileAsBytes(fileUri: string) {
-  const base64 = await FileSystem.readAsStringAsync(fileUri, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
-  return base64ToUint8(base64);
-}
-
-function base64ToUint8(base64: string) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  const clean = base64.replace(/=+$/, '');
-  const output = new Uint8Array(Math.floor((clean.length * 3) / 4));
-  let buffer = 0;
-  let bits = 0;
-  let index = 0;
-
-  for (const char of clean) {
-    const value = chars.indexOf(char);
-    if (value < 0) continue;
-    buffer = (buffer << 6) | value;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      output[index++] = (buffer >> bits) & 0xff;
-    }
-  }
-
-  return output.subarray(0, index);
-}
-
-function uint8ToBase64(bytes: Uint8Array) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  let output = '';
-  let index = 0;
-
-  for (; index + 2 < bytes.length; index += 3) {
-    const chunk = (bytes[index] << 16) | (bytes[index + 1] << 8) | bytes[index + 2];
-    output += chars[(chunk >> 18) & 63] + chars[(chunk >> 12) & 63] + chars[(chunk >> 6) & 63] + chars[chunk & 63];
-  }
-
-  if (index < bytes.length) {
-    let chunk = bytes[index] << 16;
-    output += chars[(chunk >> 18) & 63];
-    if (index + 1 < bytes.length) {
-      chunk |= bytes[index + 1] << 8;
-      output += chars[(chunk >> 12) & 63] + chars[(chunk >> 6) & 63] + '=';
-    } else {
-      output += chars[(chunk >> 12) & 63] + '==';
-    }
-  }
-
-  return output;
 }

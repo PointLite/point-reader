@@ -7,6 +7,7 @@ const SORT_KEY = 'point-reader:sort';
 
 export const defaultReadingSettings: ReadingSettings = {
   mode: 'scroll',
+  colorScheme: 'light',
   hideScrollbar: true,
   swapTapZones: false,
   volumeTurnPage: false,

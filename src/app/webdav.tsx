@@ -24,11 +24,13 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  type TextStyle,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
+import { useAppTheme, type AppColors } from '@/lib/theme';
 import { importWebDavEntries, listWebDav, type WebDavConfig } from '@/lib/webdav';
 import type { WebDavDirectory, WebDavEntry } from '@/types/reader';
 
@@ -42,6 +44,7 @@ type BrowseState = {
 };
 
 export default function WebDavScreen() {
+  const { colors } = useAppTheme();
   const [directories, setDirectories] = useState<WebDavDirectory[]>([]);
   const [entries, setEntries] = useState<WebDavEntry[]>([]);
   const [selectedHrefs, setSelectedHrefs] = useState<string[]>([]);
@@ -52,10 +55,11 @@ export default function WebDavScreen() {
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState<{ completed: number; total: number } | null>(null);
   const [form, setForm] = useState({ name: '', url: '', username: '', password: '' });
+  const selectedHrefSet = useMemo(() => new Set(selectedHrefs), [selectedHrefs]);
 
   const selectedEntries = useMemo(
-    () => entries.filter((entry) => selectedHrefs.includes(entry.href)),
-    [entries, selectedHrefs]
+    () => entries.filter((entry) => selectedHrefSet.has(entry.href)),
+    [entries, selectedHrefSet]
   );
 
   const loadDirectories = useCallback(async () => {
@@ -224,15 +228,15 @@ export default function WebDavScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView style={[styles.screen, { backgroundColor: colors.background }]}>
       <View style={styles.topBar}>
-        <Pressable accessibilityRole="button" accessibilityLabel="返回" onPress={goBack} style={styles.iconButton}>
-          <ChevronLeft size={24} color={Colors.light.text} />
+        <Pressable accessibilityRole="button" accessibilityLabel="返回" onPress={goBack} style={[styles.iconButton, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+          <ChevronLeft size={24} color={colors.text} />
         </Pressable>
         <View style={styles.titleCopy}>
-          <Text style={styles.title}>{browseState ? browseState.directory.name : 'WebDAV'}</Text>
+          <Text style={[styles.title, { color: colors.text }]}>{browseState ? browseState.directory.name : 'WebDAV'}</Text>
           {browseState ? (
-            <Text style={styles.subtitle} numberOfLines={1}>
+            <Text style={[styles.subtitle, { color: colors.textSecondary }]} numberOfLines={1}>
               {browseState.label}
             </Text>
           ) : null}
@@ -243,8 +247,8 @@ export default function WebDavScreen() {
               accessibilityRole="button"
               accessibilityLabel="关闭 WebDAV 浏览"
               onPress={closeToHome}
-              style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}>
-              <X size={22} color={Colors.light.text} />
+              style={({ pressed }) => [styles.iconButton, { borderColor: colors.border, backgroundColor: colors.surface }, pressed && styles.pressed]}>
+              <X size={22} color={colors.text} />
             </Pressable>
             <Pressable
               accessibilityRole="button"
@@ -253,11 +257,12 @@ export default function WebDavScreen() {
               onPress={importSelection}
               style={({ pressed }) => [
                 styles.actionButton,
+                { backgroundColor: colors.text },
                 selectedEntries.length === 0 && styles.actionButtonDisabled,
                 pressed && styles.pressed,
               ]}>
-              {importing ? <ActivityIndicator color={Colors.light.surface} /> : <Download size={20} color={Colors.light.surface} />}
-              <Text style={styles.actionButtonText}>导入</Text>
+              {importing ? <ActivityIndicator color={colors.surface} /> : <Download size={20} color={colors.surface} />}
+              <Text style={[styles.actionButtonText, { color: colors.surface }]}>导入</Text>
             </Pressable>
           </View>
         ) : (
@@ -265,8 +270,8 @@ export default function WebDavScreen() {
             accessibilityRole="button"
             accessibilityLabel="添加目录"
             onPress={openAddDirectory}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}>
-            <Plus size={24} color={Colors.light.text} />
+            style={({ pressed }) => [styles.iconButton, { borderColor: colors.border, backgroundColor: colors.surface }, pressed && styles.pressed]}>
+            <Plus size={24} color={colors.text} />
           </Pressable>
         )}
       </View>
@@ -278,19 +283,20 @@ export default function WebDavScreen() {
           contentContainerStyle={styles.content}
           ListHeaderComponent={
             <View style={styles.browserHeader}>
-              <Text style={styles.sectionTitle}>目录内容</Text>
-              <Text style={styles.browserMeta}>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>目录内容</Text>
+              <Text style={[styles.browserMeta, { color: colors.textSecondary }]}>
                 已选择 {selectedEntries.length} 项{importProgress ? `，已导入 ${importProgress.completed}/${importProgress.total}` : ''}
               </Text>
             </View>
           }
           ListEmptyComponent={
-            <EmptyState loading={loading} text={loading ? '正在读取目录...' : '这个目录里暂时没有内容。'} />
+            <EmptyState colors={colors} loading={loading} text={loading ? '正在读取目录...' : '这个目录里暂时没有内容。'} />
           }
           renderItem={({ item }) => (
             <WebDavEntryRow
               entry={item}
-              selected={selectedHrefs.includes(item.href)}
+              colors={colors}
+              selected={selectedHrefSet.has(item.href)}
               disabled={importing}
               onToggle={() => toggleSelected(item.href)}
               onPress={() => openEntry(item)}
@@ -302,13 +308,14 @@ export default function WebDavScreen() {
           data={directories}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.content}
-          ListHeaderComponent={<Text style={styles.sectionTitle}>我的目录</Text>}
+          ListHeaderComponent={<Text style={[styles.sectionTitle, { color: colors.text }]}>我的目录</Text>}
           ListEmptyComponent={
-            <EmptyState loading={false} text="右上角添加 WebDAV 目录后，可以在这里进入浏览并批量导入书籍。" />
+            <EmptyState colors={colors} loading={false} text="右上角添加 WebDAV 目录后，可以在这里进入浏览并批量导入书籍。" />
           }
           renderItem={({ item }) => (
             <DirectoryCard
               directory={item}
+              colors={colors}
               onPress={() => openDirectory(item)}
               onEdit={() => openEditDirectory(item)}
               onDelete={() => deleteDirectory(item)}
@@ -319,6 +326,7 @@ export default function WebDavScreen() {
 
       <DirectoryModal
         visible={modalOpen}
+        colors={colors}
         editing={Boolean(editingDirectory)}
         form={form}
         onChange={setForm}
@@ -331,49 +339,51 @@ export default function WebDavScreen() {
 
 function DirectoryCard({
   directory,
+  colors,
   onPress,
   onEdit,
   onDelete,
 }: {
   directory: WebDavDirectory;
+  colors: AppColors;
   onPress: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
   return (
-    <View style={styles.directoryCard}>
+    <View style={[styles.directoryCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`浏览 ${directory.name}`}
         onPress={onPress}
         style={({ pressed }) => [styles.directoryMain, pressed && styles.pressed]}>
-        <View style={styles.directoryIcon}>
-          <Server size={24} color={Colors.light.text} />
+        <View style={[styles.directoryIcon, { borderColor: colors.border, backgroundColor: colors.backgroundElement }]}>
+          <Server size={24} color={colors.text} />
         </View>
         <View style={styles.directoryCopy}>
-          <Text style={styles.directoryName} numberOfLines={1}>
+          <Text style={[styles.directoryName, { color: colors.text }]} numberOfLines={1}>
             {directory.name}
           </Text>
-          <Text style={styles.directoryUrl} numberOfLines={2}>
+          <Text style={[styles.directoryUrl, { color: colors.textSecondary }]} numberOfLines={2}>
             {directory.url}
           </Text>
-          <Text style={styles.directoryMeta}>{directory.username ? `账号 ${directory.username}` : '无账号'}</Text>
+          <Text style={[styles.directoryMeta, { color: colors.accent }]}>{directory.username ? `账号 ${directory.username}` : '无账号'}</Text>
         </View>
       </Pressable>
-      <View style={styles.directoryActions}>
+      <View style={[styles.directoryActions, { borderLeftColor: colors.border }]}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`编辑 ${directory.name}`}
           onPress={onEdit}
-          style={({ pressed }) => [styles.cardIconButton, pressed && styles.pressed]}>
-          <Pencil size={20} color={Colors.light.text} />
+          style={({ pressed }) => [styles.cardIconButton, { backgroundColor: colors.surface }, pressed && styles.pressed]}>
+          <Pencil size={20} color={colors.text} />
         </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`删除 ${directory.name}`}
           onPress={onDelete}
-          style={({ pressed }) => [styles.cardIconButton, styles.dangerIconButton, pressed && styles.pressed]}>
-          <Trash2 size={20} color={Colors.light.danger} />
+          style={({ pressed }) => [styles.cardIconButton, styles.dangerIconButton, { backgroundColor: colors.surface, borderTopColor: colors.border }, pressed && styles.pressed]}>
+          <Trash2 size={20} color={colors.danger} />
         </Pressable>
       </View>
     </View>
@@ -382,12 +392,14 @@ function DirectoryCard({
 
 function WebDavEntryRow({
   entry,
+  colors,
   selected,
   disabled,
   onToggle,
   onPress,
 }: {
   entry: WebDavEntry;
+  colors: AppColors;
   selected: boolean;
   disabled: boolean;
   onToggle: () => void;
@@ -396,7 +408,7 @@ function WebDavEntryRow({
   const fileMeta = entry.type === 'file' ? entryMetaText(entry) : null;
 
   return (
-    <View style={styles.entry}>
+    <View style={[styles.entry, { borderColor: colors.border, backgroundColor: colors.surface }]}>
       <Pressable
         accessibilityRole="checkbox"
         accessibilityState={{ checked: selected, disabled }}
@@ -405,8 +417,8 @@ function WebDavEntryRow({
         onPress={onToggle}
         hitSlop={Spacing.one}
         style={styles.checkboxTouch}>
-        <View style={[styles.checkboxBox, selected && styles.checkboxBoxSelected]}>
-          {selected ? <Check size={14} color={Colors.light.surface} strokeWidth={3} /> : null}
+        <View style={[styles.checkboxBox, { borderColor: colors.text, backgroundColor: colors.surface }, selected && { backgroundColor: colors.text }]}>
+          {selected ? <Check size={14} color={colors.surface} strokeWidth={3} /> : null}
         </View>
       </Pressable>
       <Pressable
@@ -416,15 +428,15 @@ function WebDavEntryRow({
         onPress={onPress}
         style={({ pressed }) => [styles.entryMain, pressed && styles.pressed]}>
         {entry.type === 'directory' ? (
-          <Folder size={24} color={Colors.light.text} />
+          <Folder size={24} color={colors.text} />
         ) : (
-          <FileText size={24} color={Colors.light.textSecondary} />
+          <FileText size={24} color={colors.textSecondary} />
         )}
         <View style={styles.entryCopy}>
-          <AutoScrollText text={entry.name} textStyle={styles.entryName} />
-          {fileMeta ? <Text style={styles.entryMeta}>{fileMeta}</Text> : null}
+          <AutoScrollText text={entry.name} textStyle={[styles.entryName, { color: colors.text }]} />
+          {fileMeta ? <Text style={[styles.entryMeta, { color: colors.textSecondary }]}>{fileMeta}</Text> : null}
         </View>
-        {entry.type === 'directory' ? <ChevronRight size={20} color={Colors.light.textSecondary} /> : null}
+        {entry.type === 'directory' ? <ChevronRight size={20} color={colors.textSecondary} /> : null}
       </Pressable>
     </View>
   );
@@ -433,6 +445,7 @@ function WebDavEntryRow({
 function DirectoryModal({
   visible,
   editing,
+  colors,
   form,
   onChange,
   onClose,
@@ -440,6 +453,7 @@ function DirectoryModal({
 }: {
   visible: boolean;
   editing: boolean;
+  colors: AppColors;
   form: { name: string; url: string; username: string; password: string };
   onChange: (form: { name: string; url: string; username: string; password: string }) => void;
   onClose: () => void;
@@ -448,32 +462,36 @@ function DirectoryModal({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
-        <View style={styles.modalCard}>
+        <View style={[styles.modalCard, { borderColor: colors.text, backgroundColor: colors.surface }]}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>{editing ? '编辑目录' : '添加目录'}</Text>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>{editing ? '编辑目录' : '添加目录'}</Text>
             <Pressable accessibilityRole="button" accessibilityLabel="关闭" onPress={onClose} style={styles.modalClose}>
-              <X size={22} color={Colors.light.text} />
+              <X size={22} color={colors.text} />
             </Pressable>
           </View>
           <LabeledInput
+            colors={colors}
             label="目录名称"
             value={form.name}
             onChangeText={(name) => onChange({ ...form, name })}
             placeholder="我的 WebDAV"
           />
           <LabeledInput
+            colors={colors}
             label="目录地址"
             value={form.url}
             onChangeText={(url) => onChange({ ...form, url })}
             placeholder="https://example.com/dav/books/"
           />
           <LabeledInput
+            colors={colors}
             label="用户名"
             value={form.username}
             onChangeText={(username) => onChange({ ...form, username })}
             placeholder="可选"
           />
           <LabeledInput
+            colors={colors}
             label="密码"
             value={form.password}
             onChangeText={(password) => onChange({ ...form, password })}
@@ -484,8 +502,8 @@ function DirectoryModal({
             accessibilityRole="button"
             accessibilityLabel={editing ? '保存修改' : '保存目录'}
             onPress={onSave}
-            style={({ pressed }) => [styles.saveButton, pressed && styles.pressed]}>
-            <Text style={styles.saveButtonText}>{editing ? '保存修改' : '保存目录'}</Text>
+            style={({ pressed }) => [styles.saveButton, { backgroundColor: colors.text }, pressed && styles.pressed]}>
+            <Text style={[styles.saveButtonText, { color: colors.surface }]}>{editing ? '保存修改' : '保存目录'}</Text>
           </Pressable>
         </View>
       </View>
@@ -495,12 +513,14 @@ function DirectoryModal({
 
 function LabeledInput({
   label,
+  colors,
   value,
   onChangeText,
   placeholder,
   secureTextEntry,
 }: {
   label: string;
+  colors: AppColors;
   value: string;
   onChangeText: (value: string) => void;
   placeholder: string;
@@ -508,27 +528,27 @@ function LabeledInput({
 }) {
   return (
     <View style={styles.inputGroup}>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={[styles.label, { color: colors.text }]}>{label}</Text>
       <TextInput
         accessibilityLabel={label}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor={Colors.light.textSecondary}
+        placeholderTextColor={colors.textSecondary}
         secureTextEntry={secureTextEntry}
         autoCapitalize="none"
         autoCorrect={false}
-        style={styles.input}
+        style={[styles.input, { borderColor: colors.border, color: colors.text }]}
       />
     </View>
   );
 }
 
-function EmptyState({ loading, text }: { loading: boolean; text: string }) {
+function EmptyState({ loading, text, colors }: { loading: boolean; text: string; colors: AppColors }) {
   return (
     <View style={styles.empty}>
-      {loading ? <ActivityIndicator color={Colors.light.text} /> : null}
-      <Text style={styles.emptyText}>{text}</Text>
+      {loading ? <ActivityIndicator color={colors.text} /> : null}
+      <Text style={[styles.emptyText, { color: colors.textSecondary }]}>{text}</Text>
     </View>
   );
 }
@@ -538,7 +558,7 @@ const AutoScrollText = memo(function AutoScrollText({
   textStyle,
 }: {
   text: string;
-  textStyle: object;
+  textStyle: TextStyle | TextStyle[];
 }) {
   const translateX = useRef(new Animated.Value(0)).current;
   const [containerWidth, setContainerWidth] = useState(0);

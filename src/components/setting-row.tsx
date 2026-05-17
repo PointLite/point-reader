@@ -2,27 +2,30 @@ import React from 'react';
 import { StyleSheet, Switch, Text, View } from 'react-native';
 
 import { Colors, Radius, Spacing } from '@/constants/theme';
+import type { AppColors } from '@/lib/theme';
 
 type SettingRowProps = {
   title: string;
   description?: string;
   value: boolean;
   onValueChange: (value: boolean) => void;
+  colors?: AppColors;
 };
 
-export function SettingRow({ title, description, value, onValueChange }: SettingRowProps) {
+export function SettingRow({ title, description, value, onValueChange, colors = Colors.light }: SettingRowProps) {
   return (
-    <View style={styles.row}>
+    <View style={[styles.row, { borderColor: colors.border, backgroundColor: colors.surface }]}>
       <View style={styles.copy}>
-        <Text style={styles.title}>{title}</Text>
-        {description ? <Text style={styles.description}>{description}</Text> : null}
+        <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
+        {description ? <Text style={[styles.description, { color: colors.textSecondary }]}>{description}</Text> : null}
       </View>
       <Switch
         accessibilityLabel={title}
         value={value}
         onValueChange={onValueChange}
-        trackColor={{ false: Colors.light.backgroundElement, true: Colors.light.accentSoft }}
-        thumbColor={value ? Colors.light.text : Colors.light.surface}
+        trackColor={{ false: colors.backgroundElement, true: colors.text }}
+        thumbColor={colors.surface}
+        ios_backgroundColor={colors.backgroundElement}
       />
     </View>
   );

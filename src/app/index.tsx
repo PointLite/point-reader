@@ -4,12 +4,15 @@ import {
   ArrowUpAZ,
   Check,
   CircleEllipsis,
+  Cloud,
+  FilePlus2,
   FolderPlus,
   Info,
   Plus,
   Search,
   Settings,
   Trash2,
+  type LucideIcon,
 } from 'lucide-react-native';
 import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
 import {
@@ -32,6 +35,7 @@ import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
 import { deleteBooks, searchBooks } from '@/lib/books';
 import { importPickedBooks } from '@/lib/importBooks';
 import { loadSortState, saveSortState } from '@/lib/settings';
+import { useAppTheme, type AppColors } from '@/lib/theme';
 import type { Book, SortField, SortState } from '@/types/reader';
 
 type ShelfItem = { type: 'book'; book: Book } | { type: 'import' };
@@ -47,10 +51,12 @@ const SORT_POPOVER_WIDTH = 156;
 
 export default function ShelfScreen() {
   const { width, height } = useWindowDimensions();
+  const { colors } = useAppTheme();
   const [books, setBooks] = useState<Book[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
+  const [showImportOptions, setShowImportOptions] = useState(false);
   const [sort, setSort] = useState<SortState>({ field: 'title', direction: 'asc' });
   const [showSort, setShowSort] = useState(false);
   const [sortMenuFrame, setSortMenuFrame] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
@@ -60,6 +66,7 @@ export default function ShelfScreen() {
   const sortRef = useRef<SortState>({ field: 'title', direction: 'asc' });
 
   const selectionMode = selectedIds.length > 0;
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const gridGap = Spacing.three;
   const horizontalPadding = Spacing.three * 2;
   const bookWidth = Math.floor((width - horizontalPadding - gridGap * 2) / 3);
@@ -117,29 +124,34 @@ export default function ShelfScreen() {
     await applySort({ ...sort, direction });
   };
 
-  const onImport = async () => {
+  const runLocalImport = useCallback(async () => {
     setImporting(true);
     try {
       await importPickedBooks();
       await refresh();
+    } catch (error) {
+      Alert.alert('导入失败', error instanceof Error ? error.message : '无法打开文件选择器');
     } finally {
       setImporting(false);
     }
+  }, [refresh]);
+
+  const onImport = () => {
+    setShowImportOptions(false);
+    setTimeout(() => {
+      void runLocalImport();
+    }, 260);
   };
 
-  const openImportOptions = () => {
-    Alert.alert('导入书籍', '选择导入方式', [
-      { text: '本地文件', onPress: onImport },
-      { text: 'WebDAV', onPress: () => router.push('/webdav') },
-      { text: '取消', style: 'cancel' },
-    ]);
-  };
+  const openImportOptions = useCallback(() => {
+    setShowImportOptions(true);
+  }, []);
 
-  const toggleSelected = (id: string) => {
+  const toggleSelected = useCallback((id: string) => {
     setSelectedIds((current) =>
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
     );
-  };
+  }, []);
 
   const deleteSelection = () => {
     Alert.alert('删除书籍', `确定删除已选 ${selectedCount} 本书？`, [
@@ -162,9 +174,36 @@ export default function ShelfScreen() {
     setBooks(await searchBooks(text, sortRef.current));
   }, []);
 
+  const keyExtractor = useCallback((item: ShelfItem) => (item.type === 'book' ? item.book.id : 'import-tile'), []);
+
+  const renderShelfItem = useCallback(
+    ({ item }: { item: ShelfItem }) =>
+      item.type === 'import' ? (
+        <ImportTile width={bookWidth} importing={importing} colors={colors} onPress={openImportOptions} />
+      ) : (
+        <BookCard
+          book={item.book}
+          width={bookWidth}
+          colors={colors}
+          selected={selectedIdSet.has(item.book.id)}
+          selectionMode={selectionMode}
+          onLongPress={() => toggleSelected(item.book.id)}
+          onPress={() => {
+            if (selectionMode) {
+              toggleSelected(item.book.id);
+            } else {
+              router.push({ pathname: '/reader/[bookId]', params: { bookId: item.book.id } });
+            }
+          }}
+        />
+      ),
+    [bookWidth, colors, importing, openImportOptions, selectedIdSet, selectionMode, toggleSelected]
+  );
+
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView style={[styles.screen, { backgroundColor: colors.background }]}>
       <ShelfHeader
+        colors={colors}
         query={query}
         bookCount={books.length}
         moreButtonRef={moreButtonRef}
@@ -173,50 +212,32 @@ export default function ShelfScreen() {
       />
       {loading ? (
         <View style={styles.loading}>
-          <ActivityIndicator color={Colors.light.text} />
+          <ActivityIndicator color={colors.text} />
         </View>
       ) : (
         <FlatList
           data={shelfItems}
-          keyExtractor={(item) => (item.type === 'book' ? item.book.id : 'import-tile')}
+          keyExtractor={keyExtractor}
           numColumns={3}
           columnWrapperStyle={[styles.gridRow, { gap: gridGap }]}
           contentContainerStyle={[styles.gridContent, selectionMode && styles.listWithSheet]}
-          renderItem={({ item }) => (
-            item.type === 'import' ? (
-              <ImportTile width={bookWidth} importing={importing} onPress={openImportOptions} />
-            ) : (
-              <BookCard
-                book={item.book}
-                width={bookWidth}
-                selected={selectedIds.includes(item.book.id)}
-                selectionMode={selectionMode}
-                onLongPress={() => toggleSelected(item.book.id)}
-                onPress={() => {
-                  if (selectionMode) {
-                    toggleSelected(item.book.id);
-                  } else {
-                    router.push({ pathname: '/reader/[bookId]', params: { bookId: item.book.id } });
-                  }
-                }}
-              />
-            )
-          )}
+          renderItem={renderShelfItem}
         />
       )}
 
       {selectionMode ? (
-        <View style={styles.selectionSheet}>
-          <Text style={styles.selectionTitle}>已选择 {selectedCount} 本</Text>
+        <View style={[styles.selectionSheet, { borderColor: colors.text, backgroundColor: colors.surface }]}>
+          <Text style={[styles.selectionTitle, { color: colors.text }]}>已选择 {selectedCount} 本</Text>
           <View style={styles.sheetActions}>
-            <InkButton label="分组" icon={FolderPlus} onPress={() => Alert.alert('分组', '第一版会保留分组入口，数据结构已准备。')} />
+            <InkButton colors={colors} label="分组" icon={FolderPlus} onPress={() => Alert.alert('分组', '第一版会保留分组入口，数据结构已准备。')} />
             <InkButton
+              colors={colors}
               label="详情"
               icon={Info}
               disabled={selectedCount !== 1}
               onPress={() => router.push({ pathname: '/book/[bookId]', params: { bookId: selectedIds[0] } })}
             />
-            <InkButton label="删除" icon={Trash2} variant="danger" onPress={deleteSelection} />
+            <InkButton colors={colors} label="删除" icon={Trash2} variant="danger" onPress={deleteSelection} />
           </View>
         </View>
       ) : null}
@@ -232,6 +253,7 @@ export default function ShelfScreen() {
           <View
             style={[
               styles.sortPopover,
+              { borderColor: colors.text, backgroundColor: colors.surface },
               {
                 top: sortMenuFrame ? sortMenuFrame.y + sortMenuFrame.height + Spacing.one : Spacing.six,
                 right: sortMenuFrame
@@ -250,19 +272,19 @@ export default function ShelfScreen() {
                   onPress={() => setSortField(field)}
                   style={({ pressed }) => [
                     styles.sortMenuItem,
-                    selected && styles.sortMenuItemSelected,
+                    selected && [styles.sortMenuItemSelected, { backgroundColor: colors.text }],
                     pressed && styles.sortMenuItemPressed,
                   ]}>
                   <View style={styles.sortMenuIconSlot}>
-                    {selected ? <Check size={18} color={Colors.light.surface} strokeWidth={3} /> : null}
+                    {selected ? <Check size={18} color={colors.surface} strokeWidth={3} /> : null}
                   </View>
-                  <Text style={[styles.sortMenuText, selected && styles.sortMenuTextSelected]}>
+                  <Text style={[styles.sortMenuText, { color: colors.text }, selected && { color: colors.surface }]}>
                     {sortLabels[field]}
                   </Text>
                 </Pressable>
               );
             })}
-            <View style={styles.sortMenuSeparator} />
+            <View style={[styles.sortMenuSeparator, { backgroundColor: colors.border }]} />
             {([
               { direction: 'asc', label: '升序', icon: ArrowDownAZ },
               { direction: 'desc', label: '降序', icon: ArrowUpAZ },
@@ -277,11 +299,11 @@ export default function ShelfScreen() {
                   onPress={() => setSortDirection(item.direction)}
                   style={({ pressed }) => [
                     styles.sortMenuItem,
-                    selected && styles.sortMenuItemSelected,
+                    selected && [styles.sortMenuItemSelected, { backgroundColor: colors.text }],
                     pressed && styles.sortMenuItemPressed,
                   ]}>
-                  <Icon size={18} color={selected ? Colors.light.surface : Colors.light.text} />
-                  <Text style={[styles.sortMenuText, selected && styles.sortMenuTextSelected]}>
+                  <Icon size={18} color={selected ? colors.surface : colors.text} />
+                  <Text style={[styles.sortMenuText, { color: colors.text }, selected && { color: colors.surface }]}>
                     {item.label}
                   </Text>
                 </Pressable>
@@ -290,17 +312,94 @@ export default function ShelfScreen() {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={showImportOptions} transparent animationType="fade" onRequestClose={() => setShowImportOptions(false)}>
+        <View style={styles.importModalLayer}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="关闭导入方式"
+            onPress={() => setShowImportOptions(false)}
+            style={StyleSheet.absoluteFillObject}
+          />
+          <View style={[styles.importSheet, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+            <Text style={[styles.importSheetTitle, { color: colors.text }]}>添加书籍</Text>
+            <Text style={[styles.importSheetHint, { color: colors.textSecondary }]}>选择导入来源</Text>
+            <View style={styles.importActions}>
+              <ImportAction
+                colors={colors}
+                icon={FilePlus2}
+                title="本地文件"
+                description="从设备中选择 EPUB、TXT 或 PDF"
+                onPress={onImport}
+              />
+              <ImportAction
+                colors={colors}
+                icon={Cloud}
+                title="WebDAV"
+                description="浏览已保存的 WebDAV 目录"
+                onPress={() => {
+                  setShowImportOptions(false);
+                  router.push('/webdav');
+                }}
+              />
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="取消导入"
+              onPress={() => setShowImportOptions(false)}
+              style={({ pressed }) => [styles.importCancelButton, { borderColor: colors.border }, pressed && styles.sortMenuItemPressed]}>
+              <Text style={[styles.importCancelText, { color: colors.text }]}>取消</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
+function ImportAction({
+  colors,
+  icon: Icon,
+  title,
+  description,
+  onPress,
+}: {
+  colors: AppColors;
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.importAction,
+        { borderColor: colors.border, backgroundColor: colors.background },
+        pressed && styles.sortMenuItemPressed,
+      ]}>
+      <View style={[styles.importActionIcon, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+        <Icon size={24} color={colors.text} strokeWidth={2.2} />
+      </View>
+      <View style={styles.importActionCopy}>
+        <Text style={[styles.importActionTitle, { color: colors.text }]}>{title}</Text>
+        <Text style={[styles.importActionDescription, { color: colors.textSecondary }]}>{description}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
 const ShelfHeader = memo(function ShelfHeader({
+  colors,
   query,
   bookCount,
   moreButtonRef,
   onChangeQuery,
   onToggleSortMenu,
 }: {
+  colors: AppColors;
   query: string;
   bookCount: number;
   moreButtonRef: React.RefObject<View | null>;
@@ -310,15 +409,15 @@ const ShelfHeader = memo(function ShelfHeader({
   return (
     <View style={styles.header}>
       <View style={styles.topControls}>
-        <View style={styles.searchBox}>
-          <Search size={20} color={Colors.light.textSecondary} strokeWidth={2.2} />
+        <View style={[styles.searchBox, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+          <Search size={20} color={colors.textSecondary} strokeWidth={2.2} />
           <TextInput
             accessibilityLabel="搜索书籍"
             placeholder={`在 ${bookCount} 本书籍中搜索...`}
-            placeholderTextColor={Colors.light.textSecondary}
+            placeholderTextColor={colors.textSecondary}
             value={query}
             onChangeText={onChangeQuery}
-            style={styles.searchInput}
+            style={[styles.searchInput, { color: colors.text }]}
           />
         </View>
         <View ref={moreButtonRef} style={styles.moreMenuAnchor}>
@@ -326,16 +425,16 @@ const ShelfHeader = memo(function ShelfHeader({
             accessibilityRole="button"
             accessibilityLabel="排序"
             onPress={onToggleSortMenu}
-            style={styles.headerIconButton}>
-            <CircleEllipsis size={24} color={Colors.light.text} strokeWidth={2.2} />
+            style={[styles.headerIconButton, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+            <CircleEllipsis size={24} color={colors.text} strokeWidth={2.2} />
           </Pressable>
         </View>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="设置"
           onPress={() => router.push('/settings')}
-          style={styles.headerIconButton}>
-          <Settings size={24} color={Colors.light.text} strokeWidth={2.2} />
+          style={[styles.headerIconButton, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+          <Settings size={24} color={colors.text} strokeWidth={2.2} />
         </Pressable>
       </View>
     </View>
@@ -345,10 +444,12 @@ const ShelfHeader = memo(function ShelfHeader({
 function ImportTile({
   width,
   importing,
+  colors,
   onPress,
 }: {
   width: number;
   importing: boolean;
+  colors: AppColors;
   onPress: () => void;
 }) {
   return (
@@ -359,13 +460,14 @@ function ImportTile({
       onPress={onPress}
       style={({ pressed }) => [
         styles.importTile,
+        { borderColor: colors.border, backgroundColor: colors.surface },
         {
           width,
           height: width * 1.44,
           opacity: importing ? 0.45 : pressed ? 0.65 : 1,
         },
       ]}>
-      <Plus size={42} color={Colors.light.textSecondary} strokeWidth={1.8} />
+      <Plus size={42} color={colors.textSecondary} strokeWidth={1.8} />
     </Pressable>
   );
 }
@@ -482,6 +584,93 @@ const styles = StyleSheet.create({
   },
   sortMenuTextSelected: {
     color: Colors.light.surface,
+  },
+  importModalLayer: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  importSheet: {
+    marginHorizontal: 0,
+    marginBottom: 0,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    padding: Spacing.three,
+    gap: Spacing.two,
+  },
+  importSheetTitle: {
+    fontSize: 20,
+    lineHeight: 24,
+    fontWeight: '900',
+    color: Colors.light.text,
+  },
+  importSheetHint: {
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: '700',
+    color: Colors.light.textSecondary,
+    marginBottom: Spacing.one,
+  },
+  importActions: {
+    gap: Spacing.two,
+  },
+  importAction: {
+    minHeight: 74,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+    padding: Spacing.two,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+  },
+  importActionIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  importActionCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  importActionTitle: {
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: '900',
+    color: Colors.light.text,
+  },
+  importActionDescription: {
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: '600',
+    color: Colors.light.textSecondary,
+  },
+  importCancelButton: {
+    minHeight: TouchTarget,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: Spacing.one,
+  },
+  importCancelText: {
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: '800',
+    color: Colors.light.text,
   },
   importTile: {
     borderRadius: Radius.medium,

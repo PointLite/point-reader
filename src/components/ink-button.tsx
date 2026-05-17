@@ -3,6 +3,7 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, type ViewStyle } from 'react-native';
 
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
+import type { AppColors } from '@/lib/theme';
 
 type InkButtonProps = {
   label: string;
@@ -12,6 +13,7 @@ type InkButtonProps = {
   selected?: boolean;
   disabled?: boolean;
   style?: ViewStyle;
+  colors?: AppColors;
 };
 
 export function InkButton({
@@ -22,8 +24,8 @@ export function InkButton({
   selected,
   disabled,
   style,
+  colors = Colors.light,
 }: InkButtonProps) {
-  const colors = Colors.light;
   const isPrimary = variant === 'primary';
   const isDanger = variant === 'danger';
   const backgroundColor = selected || isPrimary ? colors.text : variant === 'quiet' ? 'transparent' : colors.surface;

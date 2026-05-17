@@ -3,6 +3,7 @@ import React, { memo } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Radius, Spacing } from '@/constants/theme';
+import type { AppColors } from '@/lib/theme';
 import type { Book } from '@/types/reader';
 
 type BookCardProps = {
@@ -10,11 +11,12 @@ type BookCardProps = {
   selected: boolean;
   selectionMode: boolean;
   width: number;
+  colors?: AppColors;
   onPress: () => void;
   onLongPress: () => void;
 };
 
-function BookCardBase({ book, selected, selectionMode, width, onPress, onLongPress }: BookCardProps) {
+function BookCardBase({ book, selected, selectionMode, width, colors = Colors.light, onPress, onLongPress }: BookCardProps) {
   const progress = Math.round(book.progress * 100);
   const isRead = progress >= 99;
   const titleStyle = getTitleTextStyle(book.title);
@@ -30,34 +32,44 @@ function BookCardBase({ book, selected, selectionMode, width, onPress, onLongPre
         { width },
         pressed && styles.pressed,
       ]}>
-      <View style={[styles.cover, { height: width * 1.44 }, selected && styles.selectedCover]}>
+      <View
+        style={[
+          styles.cover,
+          { height: width * 1.44, borderColor: selected ? colors.text : colors.border, backgroundColor: colors.surface },
+          selected && styles.selectedCover,
+        ]}>
         {book.coverUri ? (
           <Image source={{ uri: book.coverUri }} style={styles.coverImage} resizeMode="cover" />
         ) : (
-          <View style={styles.fallbackCover}>
-            <BookOpen size={30} color={Colors.light.text} />
-            <Text style={styles.format}>{book.format.toUpperCase()}</Text>
+          <View style={[styles.fallbackCover, { backgroundColor: colors.surface }]}>
+            <BookOpen size={30} color={colors.text} />
+            <Text style={[styles.format, { color: colors.textSecondary }]}>{book.format.toUpperCase()}</Text>
           </View>
         )}
         {selected ? (
-          <View style={styles.selectedBadge}>
-            <Check size={18} color={Colors.light.surface} strokeWidth={3} />
+          <View style={[styles.selectedBadge, { backgroundColor: colors.text }]}>
+            <Check size={18} color={colors.surface} strokeWidth={3} />
           </View>
         ) : null}
-        {selectionMode && !selected ? <View style={styles.checkbox} /> : null}
+        {selectionMode && !selected ? <View style={[styles.checkbox, { borderColor: colors.text, backgroundColor: colors.surface }]} /> : null}
       </View>
       <View style={styles.meta}>
         <Text
-          style={[styles.title, titleStyle]}
+          style={[styles.title, titleStyle, { color: colors.text }]}
           numberOfLines={2}
           ellipsizeMode="tail">
           {book.title}
         </Text>
-        {isRead ? (
-          <Text style={styles.readTag}>已读</Text>
-        ) : (
-          <Text style={styles.progressText}>{progress}%</Text>
-        )}
+        <View style={styles.detailRow}>
+          {isRead ? (
+            <Text style={[styles.readTag, { borderColor: colors.accent, backgroundColor: colors.accentSoft, color: colors.text }]}>已读</Text>
+          ) : (
+            <Text style={[styles.progressText, { color: colors.textSecondary }]}>{progress}%</Text>
+          )}
+          <Text style={[styles.formatTag, { borderColor: colors.border, color: colors.textSecondary }]}>
+            {book.format.toUpperCase()}
+          </Text>
+        </View>
       </View>
     </Pressable>
   );
@@ -115,6 +127,13 @@ const styles = StyleSheet.create({
   meta: {
     gap: Spacing.one,
   },
+  detailRow: {
+    minHeight: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.one,
+  },
   title: {
     minHeight: 40,
     fontWeight: '900',
@@ -135,6 +154,17 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     paddingHorizontal: Spacing.two,
     paddingVertical: 2,
+  },
+  formatTag: {
+    maxWidth: 56,
+    borderWidth: 1,
+    borderRadius: Radius.small,
+    paddingHorizontal: Spacing.one,
+    paddingVertical: 1,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '800',
+    overflow: 'hidden',
   },
   checkbox: {
     position: 'absolute',

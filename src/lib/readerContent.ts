@@ -10,6 +10,25 @@ export const readerBackgrounds: Record<ReadingSettings['background'], string> = 
 };
 
 export const readerForeground = '#1C1917';
+export const readerNightBackground = '#171717';
+export const readerNightForeground = '#F5F5F4';
+
+export function resolveReaderColorScheme(settings: ReadingSettings, systemScheme?: 'light' | 'dark' | null) {
+  if (settings.colorScheme === 'system') {
+    return systemScheme === 'dark' ? 'dark' : 'light';
+  }
+  return settings.colorScheme;
+}
+
+export function readerBackgroundFor(settings: ReadingSettings, systemScheme?: 'light' | 'dark' | null) {
+  return resolveReaderColorScheme(settings, systemScheme) === 'dark'
+    ? readerNightBackground
+    : readerBackgrounds[settings.background];
+}
+
+export function readerForegroundFor(settings: ReadingSettings, systemScheme?: 'light' | 'dark' | null) {
+  return resolveReaderColorScheme(settings, systemScheme) === 'dark' ? readerNightForeground : readerForeground;
+}
 
 export function fontFamilyFor(setting: ReadingSettings['fontFamily']) {
   if (setting === 'serif') return 'serif';
@@ -19,13 +38,7 @@ export function fontFamilyFor(setting: ReadingSettings['fontFamily']) {
 
 export async function loadTextChapters(book: Book): Promise<ReaderChapter[]> {
   if (book.format !== 'txt') {
-    return [
-      {
-        id: 'external-renderer',
-        title: book.format.toUpperCase(),
-        text: '',
-      },
-    ];
+    return [];
   }
 
   const raw = await FileSystem.readAsStringAsync(book.fileUri, {
