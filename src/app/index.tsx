@@ -14,7 +14,7 @@ import {
   Trash2,
   type LucideIcon,
 } from 'lucide-react-native';
-import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -36,6 +36,7 @@ import { deleteBooks, searchBooks } from '@/lib/books';
 import { importPickedBooks } from '@/lib/importBooks';
 import { loadSortState, saveSortState } from '@/lib/settings';
 import { useAppTheme, type AppColors } from '@/lib/theme';
+import { useWebDavImport, type WebDavImportSnapshot } from '@/lib/webdavImportQueue';
 import type { Book, SortField, SortState } from '@/types/reader';
 
 type ShelfItem = { type: 'book'; book: Book } | { type: 'import' };
@@ -64,6 +65,8 @@ export default function ShelfScreen() {
   const moreButtonRef = useRef<View>(null);
   const queryRef = useRef('');
   const sortRef = useRef<SortState>({ field: 'title', direction: 'asc' });
+  const handledWebDavImportRef = useRef(0);
+  const webDavImport = useWebDavImport();
 
   const selectionMode = selectedIds.length > 0;
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
@@ -92,6 +95,13 @@ export default function ShelfScreen() {
       refresh();
     }, [refresh])
   );
+
+  useEffect(() => {
+    if (webDavImport.status !== 'success') return;
+    if (handledWebDavImportRef.current === webDavImport.updatedAt) return;
+    handledWebDavImportRef.current = webDavImport.updatedAt;
+    void refresh();
+  }, [refresh, webDavImport.status, webDavImport.updatedAt]);
 
   const selectedCount = selectedIds.length;
 
@@ -221,6 +231,11 @@ export default function ShelfScreen() {
           numColumns={3}
           columnWrapperStyle={[styles.gridRow, { gap: gridGap }]}
           contentContainerStyle={[styles.gridContent, selectionMode && styles.listWithSheet]}
+          ListHeaderComponent={
+            webDavImport.status === 'idle' ? null : (
+              <WebDavImportProgressRow colors={colors} state={webDavImport} />
+            )
+          }
           renderItem={renderShelfItem}
         />
       )}
@@ -343,17 +358,47 @@ export default function ShelfScreen() {
                 }}
               />
             </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="取消导入"
-              onPress={() => setShowImportOptions(false)}
-              style={({ pressed }) => [styles.importCancelButton, { borderColor: colors.border }, pressed && styles.sortMenuItemPressed]}>
-              <Text style={[styles.importCancelText, { color: colors.text }]}>取消</Text>
-            </Pressable>
           </View>
         </View>
       </Modal>
     </SafeAreaView>
+  );
+}
+
+function WebDavImportProgressRow({
+  colors,
+  state,
+}: {
+  colors: AppColors;
+  state: WebDavImportSnapshot;
+}) {
+  const progress = state.total > 0 ? Math.min(1, state.completed / state.total) : 0;
+  const progressLabel = state.total > 0 ? `${state.completed}/${state.total}` : '准备中';
+  const title =
+    state.status === 'running'
+      ? 'WebDAV 正在导入'
+      : state.status === 'success'
+        ? 'WebDAV 导入完成'
+        : 'WebDAV 导入失败';
+  const detail = state.message ?? progressLabel;
+
+  return (
+    <View style={[styles.webDavImportRow, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+      <View style={styles.webDavImportCopy}>
+        <Text style={[styles.webDavImportTitle, { color: colors.text }]}>{title}</Text>
+        <Text style={[styles.webDavImportMeta, { color: colors.textSecondary }]} numberOfLines={1}>
+          {state.status === 'running' ? progressLabel : detail}
+        </Text>
+      </View>
+      {state.status === 'running' ? (
+        <ActivityIndicator color={colors.text} />
+      ) : (
+        <Text style={[styles.webDavImportResult, { color: colors.textSecondary }]}>{state.imported} 本</Text>
+      )}
+      <View style={[styles.webDavImportTrack, { backgroundColor: colors.backgroundElement }]}>
+        <View style={[styles.webDavImportFill, { backgroundColor: colors.text, width: `${progress * 100}%` }]} />
+      </View>
+    </View>
   );
 }
 
@@ -490,6 +535,56 @@ const styles = StyleSheet.create({
   },
   gridRow: {
     alignItems: 'flex-start',
+  },
+  webDavImportRow: {
+    minHeight: 58,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+    marginBottom: Spacing.one,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    overflow: 'hidden',
+  },
+  webDavImportCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  webDavImportTitle: {
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '900',
+    color: Colors.light.text,
+  },
+  webDavImportMeta: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    color: Colors.light.textSecondary,
+  },
+  webDavImportResult: {
+    minWidth: 42,
+    textAlign: 'right',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
+    color: Colors.light.textSecondary,
+  },
+  webDavImportTrack: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 3,
+    backgroundColor: Colors.light.backgroundElement,
+  },
+  webDavImportFill: {
+    height: 3,
+    backgroundColor: Colors.light.text,
   },
   listWithSheet: {
     paddingBottom: 144,
@@ -656,21 +751,6 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     fontWeight: '600',
     color: Colors.light.textSecondary,
-  },
-  importCancelButton: {
-    minHeight: TouchTarget,
-    borderRadius: Radius.medium,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: Spacing.one,
-  },
-  importCancelText: {
-    fontSize: 15,
-    lineHeight: 19,
-    fontWeight: '800',
-    color: Colors.light.text,
   },
   importTile: {
     borderRadius: Radius.medium,

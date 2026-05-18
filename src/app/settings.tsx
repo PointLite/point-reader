@@ -4,7 +4,6 @@ import React, { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { ReaderMetricControl } from '@/components/reader/metric-control';
 import { SettingRow } from '@/components/setting-row';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
 import { defaultReadingSettings, loadReadingSettings, saveReadingSettings } from '@/lib/settings';
@@ -137,22 +136,6 @@ export default function SettingsScreen() {
             />
           </>
         )}
-
-        <View style={[styles.panel, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-          <Text style={[styles.panelTitle, { color: colors.text }]}>默认文字大小</Text>
-          <ReaderMetricControl
-            value={settings.fontSize}
-            colors={colors}
-            min={16}
-            max={30}
-            step={1}
-            leftLabel="A"
-            rightLabel="A"
-            valueLabel={`${settings.fontSize}`}
-            accessibilityLabel="默认文字大小"
-            onValue={(value) => update({ fontSize: value })}
-          />
-        </View>
       </ScrollView>
     </SafeAreaView>
   );

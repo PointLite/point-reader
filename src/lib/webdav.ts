@@ -124,7 +124,7 @@ export async function importWebDavEntry(config: WebDavConfig, entry: WebDavEntry
 export async function importWebDavEntries(
   config: WebDavConfig,
   entries: WebDavEntry[],
-  onProgress?: (completed: number, total: number) => void
+  onProgress?: (completed: number, total: number, imported: number) => void
 ): Promise<Book[]> {
   const files: WebDavEntry[] = [];
   const visited = new Set<string>();
@@ -134,10 +134,10 @@ export async function importWebDavEntries(
   }
 
   const books: Book[] = [];
-  for (const file of files) {
+  for (const [index, file] of files.entries()) {
     const book = await importWebDavEntry(config, file);
     if (book) books.push(book);
-    onProgress?.(books.length, files.length);
+    onProgress?.(index + 1, files.length, books.length);
   }
 
   return books;

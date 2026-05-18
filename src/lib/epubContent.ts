@@ -48,12 +48,12 @@ export async function loadEpubHtmlBook(fileUri: string): Promise<EpubHtmlBook> {
       const href = normalizeZipPath(`${opfDir}${item.href}`);
       const html = readZipText(zip, href);
       if (!html) return null;
-      const title = tocByHref.get(normalizeHrefKey(item.href)) ?? tocByHref.get(normalizeHrefKey(href)) ?? `章节 ${spineIndex + 1}`;
+      const title = tocByHref.get(normalizeHrefKey(item.href)) ?? tocByHref.get(normalizeHrefKey(href)) ?? '';
       const body = extractBodyHtml(html);
       const rewritten = rewriteResourceLinks(body, zip, href);
       return {
         id: href,
-        title,
+        title: title.trim(),
         href: item.href,
         html: rewritten,
       };
@@ -74,7 +74,7 @@ function readToc(zip: Record<string, Uint8Array>, opfDir: string, manifestItems:
 
   if (parsed.ncx?.navMap?.navPoint) {
     return flattenNavPoints(toArray<any>(parsed.ncx.navMap.navPoint)).map((point) => ({
-      title: textValue(point.navLabel?.text) || '未命名章节',
+      title: textValue(point.navLabel?.text) || '',
       href: point.content?.src ?? '',
     }));
   }
@@ -92,7 +92,7 @@ function flattenNavLinks(items: any[]): { title: string; href: string }[] {
   return items.flatMap((item) => {
     const link = item.a ?? item.span;
     const current = link?.href
-      ? [{ title: textValue(link) || '未命名章节', href: link.href }]
+      ? [{ title: textValue(link) || '', href: link.href }]
       : [];
     return [...current, ...flattenNavLinks(toArray(item.ol?.li))];
   });

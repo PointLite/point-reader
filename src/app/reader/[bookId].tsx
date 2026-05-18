@@ -488,7 +488,11 @@ export default function ReaderScreen() {
           setChapters([]);
           setTextWindowStart(0);
           setTextScrollRequest(null);
-          setEpubToc(nextEpub.chapters.map((chapter) => ({ id: chapter.id, href: chapter.href, label: chapter.title, subitems: [] })));
+          setEpubToc(
+            nextEpub.chapters
+              .map((chapter) => ({ id: chapter.id, href: chapter.href, label: chapter.title.trim(), subitems: [] }))
+              .filter((chapter) => chapter.label.length > 0)
+          );
           const { index: restoredIndex, offset: restoredOffset } = resolveEpubRestorePosition(nextBook, nextEpub);
           const restoredBook = { ...nextBook, currentChapter: restoredIndex, currentOffset: restoredOffset };
           setBook(restoredBook);
@@ -927,6 +931,11 @@ export default function ReaderScreen() {
           onStyleChange={guardProgressForStyleChange}
           onSeekProgress={seekToProgress}
           disabledSheets={book.format === 'pdf' ? ['theme', 'font'] : []}
+          resolveChapterIndex={(href, fallbackIndex) => {
+            if (book.format !== 'epub' || !epubHtmlBook) return fallbackIndex;
+            const index = epubHtmlBook.chapters.findIndex((chapter) => isSameEpubHref(chapter.href, href));
+            return index >= 0 ? index : fallbackIndex;
+          }}
         />
       ) : null}
 
@@ -1381,6 +1390,8 @@ body { -webkit-text-size-adjust: none; }
   var restoreTargetProgress = ${safeInitialProgress};
   var restoreLockUntil = restoreTargetProgress > 0.015 ? Date.now() + 4200 : 0;
   var restoreLocking = false;
+  var restoreLayoutUntil = restoreTargetProgress > 0.015 ? Date.now() + 2600 : 0;
+  var restoreFinalized = false;
   var touchStart = { x: 0, y: 0 };
   var moved = false;
 
@@ -1519,6 +1530,7 @@ body { -webkit-text-size-adjust: none; }
   }
 
   function prependRange(nextStart) {
+    if (Date.now() < restoreLayoutUntil) return;
     var targetStart = Math.max(0, nextStart);
     if (targetStart >= start) return;
     var anchor = captureAnchor();
@@ -1535,6 +1547,7 @@ body { -webkit-text-size-adjust: none; }
   }
 
   function recycleWindow(anchor) {
+    if (Date.now() < restoreLayoutUntil) return;
     var section = anchor && typeof anchor.index === 'number' ? document.getElementById('chapter-' + anchor.index) : currentChapter();
     var currentIndex = section ? Number(section.getAttribute('data-index')) || start : start;
     var keepStart = Math.max(0, currentIndex - 4);
@@ -1569,6 +1582,7 @@ body { -webkit-text-size-adjust: none; }
   function jumpTo(index) {
     index = Math.max(0, Math.min(Number(index) || 0, chapters.length - 1));
     restoreLockUntil = 0;
+    restoreLayoutUntil = 0;
     suppressProgressUntil = Date.now() + 700;
     renderRange(Math.max(0, index - 3), Math.min(chapters.length, index + 5));
     requestAnimationFrame(function () {
@@ -1584,7 +1598,10 @@ body { -webkit-text-size-adjust: none; }
   function jumpToOffset(index, offset, keepRestoreLock) {
     index = Math.max(0, Math.min(Number(index) || 0, chapters.length - 1));
     offset = Math.max(0, Math.min(1, Number(offset) || 0));
-    if (!keepRestoreLock) restoreLockUntil = 0;
+    if (!keepRestoreLock) {
+      restoreLockUntil = 0;
+      restoreLayoutUntil = 0;
+    }
     suppressProgressUntil = Date.now() + 1200;
     renderRange(Math.max(0, index - 3), Math.min(chapters.length, index + 5));
     function applyScroll() {
@@ -1605,10 +1622,68 @@ body { -webkit-text-size-adjust: none; }
     });
   }
 
+  function waitForChapterLayout(index, callback) {
+    var element = document.getElementById('chapter-' + index);
+    if (!element) {
+      callback();
+      return;
+    }
+    var pendingImages = Array.prototype.slice.call(element.querySelectorAll('img')).filter(function (image) {
+      return !image.complete;
+    });
+    var pending = pendingImages.length + 1;
+    var done = false;
+    var lastHeight = -1;
+    var stableFrames = 0;
+
+    function release() {
+      pending -= 1;
+      if (pending <= 0) waitForStableHeight();
+    }
+
+    function waitForStableHeight() {
+      if (done) return;
+      requestAnimationFrame(function () {
+        var nextHeight = element.offsetHeight || 0;
+        if (Math.abs(nextHeight - lastHeight) <= 1) stableFrames += 1;
+        else stableFrames = 0;
+        lastHeight = nextHeight;
+        if (stableFrames >= 2) {
+          done = true;
+          callback();
+          return;
+        }
+        waitForStableHeight();
+      });
+    }
+
+    pendingImages.forEach(function (image) {
+      image.addEventListener('load', release, { once: true });
+      image.addEventListener('error', release, { once: true });
+    });
+
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(release).catch(release);
+    } else {
+      release();
+    }
+  }
+
+  function finalizeInitialRestore() {
+    if (restoreFinalized || restoreTargetProgress <= 0.015) return;
+    waitForChapterLayout(restoreTargetIndex, function () {
+      if (restoreFinalized) return;
+      restoreFinalized = true;
+      restoreLayoutUntil = 0;
+      jumpToOffset(restoreTargetIndex, restoreTargetOffset, false);
+    });
+  }
+
   function enforceRestoreLock(currentProgress) {
     if (restoreLocking || Date.now() > restoreLockUntil || restoreTargetProgress <= 0.015) return false;
     if (currentProgress + 0.025 >= restoreTargetProgress) return false;
     restoreLocking = true;
+    restoreLayoutUntil = Date.now() + 1200;
     suppressProgressUntil = Date.now() + 900;
     jumpToOffset(restoreTargetIndex, restoreTargetOffset, true);
     setTimeout(function () {
@@ -1677,6 +1752,7 @@ body { -webkit-text-size-adjust: none; }
   document.addEventListener('touchstart', function (event) {
     if (!event.touches || event.touches.length !== 1) return;
     restoreLockUntil = 0;
+    restoreLayoutUntil = 0;
     moved = false;
     touchStart = { x: event.touches[0].clientX, y: event.touches[0].clientY };
   }, true);
@@ -1701,7 +1777,10 @@ body { -webkit-text-size-adjust: none; }
 
   window.PointReader = { jumpTo: jumpTo, jumpToOffset: jumpToOffset, applySettings: applySettings };
   renderRange(start, end);
-  requestAnimationFrame(function () { jumpToOffset(${safeInitialIndex}, ${safeInitialOffset}, true); });
+  requestAnimationFrame(function () {
+    jumpToOffset(${safeInitialIndex}, ${safeInitialOffset}, true);
+    finalizeInitialRestore();
+  });
 })();
 </script>
 </body>
@@ -1849,7 +1928,7 @@ function chaptersForSheet(format: Book['format'], epubToc: Toc, chapters: Reader
         text: '',
         href: item.href,
       }))
-      .filter((chapter) => chapter.title.length > 0 || Boolean(chapter.href));
+      .filter((chapter) => chapter.title.length > 0);
   }
 
   if (format === 'txt') {
@@ -2096,6 +2175,7 @@ function ReaderSheet({
   onSettings,
   onStyleChange,
   onSeekProgress,
+  resolveChapterIndex,
 }: {
   sheet: 'toc' | 'theme' | 'progress' | 'font';
   settings: ReadingSettings;
@@ -2111,12 +2191,19 @@ function ReaderSheet({
   onSettings: (patch: Partial<ReadingSettings>) => void;
   onStyleChange: () => void;
   onSeekProgress: (progress: number) => void;
+  resolveChapterIndex?: (href: string | undefined, fallbackIndex: number) => number;
 }) {
   const { changeTheme, injectJavascript } = useReader();
   const [localSettings, setLocalSettings] = useState(settings);
   const tocListRef = useRef<ScrollView>(null);
   const themeDisabled = disabledSheets.includes('theme');
   const fontDisabled = disabledSheets.includes('font');
+  const sheetTitle = {
+    toc: '章节',
+    theme: '背景',
+    progress: '进度',
+    font: '字体',
+  }[sheet];
 
   useEffect(() => {
     setLocalSettings(settings);
@@ -2154,7 +2241,10 @@ function ReaderSheet({
   }, [chapters, currentChapterHref, currentChapterIndex, hasChapters, sheet]);
 
   return (
-    <View style={[styles.sheet, { backgroundColor: colors.surface }]}>
+    <View style={[styles.sheet, { backgroundColor: colors.surface, shadowColor: colors.text }]}>
+      <View style={[styles.sheetTitleWrap, { borderBottomColor: colors.backgroundElement }]}>
+        <Text style={[styles.sheetTitle, { color: colors.text }]}>{sheetTitle}</Text>
+      </View>
       {sheet === 'toc' ? (
         hasChapters ? (
           <ScrollView ref={tocListRef} style={styles.tocList}>
@@ -2237,7 +2327,7 @@ function ReaderSheet({
                       true;
                     `);
                   }
-                  onSelectChapter(index, targetHref || chapter.href);
+                  onSelectChapter(resolveChapterIndex?.(targetHref || chapter.href, index) ?? index, targetHref || chapter.href);
                 }}
                 style={[styles.tocItem, { borderBottomColor: colors.backgroundElement }, isCurrent && { backgroundColor: colors.backgroundElement }]}>
                 <Text style={[styles.tocTitle, { color: colors.text }, isCurrent && styles.tocTitleCurrent]} numberOfLines={2}>
@@ -2905,10 +2995,27 @@ const styles = StyleSheet.create({
     maxHeight: '42%',
     backgroundColor: Colors.light.surface,
     paddingHorizontal: Spacing.three,
-    paddingTop: Spacing.three,
+    paddingTop: Spacing.two,
     paddingBottom: Spacing.four,
     gap: Spacing.two,
     zIndex: 20,
+    shadowColor: Colors.light.text,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    elevation: 10,
+  },
+  sheetTitle: {
+    fontSize: 19,
+    lineHeight: 24,
+    fontWeight: '800',
+  },
+  sheetTitleWrap: {
+    paddingTop: Spacing.two,
+    paddingBottom: Spacing.two,
+    marginBottom: Spacing.one,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.backgroundElement,
   },
   tocList: {
     maxHeight: 320,

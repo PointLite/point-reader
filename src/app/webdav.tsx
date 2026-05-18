@@ -31,7 +31,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
 import { useAppTheme, type AppColors } from '@/lib/theme';
-import { importWebDavEntries, listWebDav, type WebDavConfig } from '@/lib/webdav';
+import { listWebDav, type WebDavConfig } from '@/lib/webdav';
+import { startWebDavImport, useWebDavImport } from '@/lib/webdavImportQueue';
 import type { WebDavDirectory, WebDavEntry } from '@/types/reader';
 
 const WEBDAV_DIRECTORIES_KEY = 'point-reader:webdav-directories';
@@ -52,9 +53,10 @@ export default function WebDavScreen() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingDirectory, setEditingDirectory] = useState<WebDavDirectory | null>(null);
   const [loading, setLoading] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [importProgress, setImportProgress] = useState<{ completed: number; total: number } | null>(null);
   const [form, setForm] = useState({ name: '', url: '', username: '', password: '' });
+  const navigationRequestRef = useRef(0);
+  const webDavImport = useWebDavImport();
+  const importing = webDavImport.status === 'running';
   const selectedHrefSet = useMemo(() => new Set(selectedHrefs), [selectedHrefs]);
 
   const selectedEntries = useMemo(
@@ -83,37 +85,50 @@ export default function WebDavScreen() {
   });
 
   const loadEntries = async (directory: WebDavDirectory, href?: string) => {
+    const requestId = ++navigationRequestRef.current;
     setLoading(true);
-    setSelectedHrefs([]);
     try {
-      setEntries(await listWebDav(configFor(directory), href));
+      const nextEntries = await listWebDav(configFor(directory), href);
+      if (requestId !== navigationRequestRef.current) return false;
+      setEntries(nextEntries);
+      setSelectedHrefs([]);
+      return true;
     } catch (error) {
-      Alert.alert('WebDAV', error instanceof Error ? error.message : '无法浏览目录');
+      if (requestId === navigationRequestRef.current) {
+        Alert.alert('WebDAV', error instanceof Error ? error.message : '无法浏览目录');
+      }
+      return false;
     } finally {
-      setLoading(false);
+      if (requestId === navigationRequestRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   const openDirectory = async (directory: WebDavDirectory) => {
+    if (loading || importing) return;
     const nextState = { directory, href: undefined, label: directory.name, history: [] };
-    setBrowseState(nextState);
-    await loadEntries(directory);
+    const loaded = await loadEntries(directory);
+    if (loaded) setBrowseState(nextState);
   };
 
   const openEntry = async (entry: WebDavEntry) => {
+    if (loading || importing) return;
     if (!browseState) return;
     if (entry.type === 'file') return;
 
-    setBrowseState({
+    const nextState = {
       directory: browseState.directory,
       href: entry.href,
       label: entry.name,
       history: [...browseState.history, { href: browseState.href, label: browseState.label }],
-    });
-    await loadEntries(browseState.directory, entry.href);
+    };
+    const loaded = await loadEntries(browseState.directory, entry.href);
+    if (loaded) setBrowseState(nextState);
   };
 
   const goBack = async () => {
+    if (loading) return;
     if (!browseState) {
       router.back();
       return;
@@ -128,13 +143,14 @@ export default function WebDavScreen() {
     }
 
     const nextHistory = browseState.history.slice(0, -1);
-    setBrowseState({
+    const nextState = {
       directory: browseState.directory,
       href: previous.href,
       label: previous.label,
       history: nextHistory,
-    });
-    await loadEntries(browseState.directory, previous.href);
+    };
+    const loaded = await loadEntries(browseState.directory, previous.href);
+    if (loaded) setBrowseState(nextState);
   };
 
   const toggleSelected = (href: string) => {
@@ -206,20 +222,10 @@ export default function WebDavScreen() {
 
   const importSelection = async () => {
     if (!browseState || selectedEntries.length === 0) return;
-    setImporting(true);
-    setImportProgress({ completed: 0, total: selectedEntries.length });
-    try {
-      const books = await importWebDavEntries(configFor(browseState.directory), selectedEntries, (completed, total) => {
-        setImportProgress({ completed, total });
-      });
-      Alert.alert('导入完成', books.length ? `已导入 ${books.length} 本书。` : '未找到可导入的 EPUB、TXT 或 PDF 文件。');
-      setSelectedHrefs([]);
-    } catch (error) {
-      Alert.alert('导入失败', error instanceof Error ? error.message : '无法导入所选内容');
-    } finally {
-      setImporting(false);
-      setImportProgress(null);
-    }
+    const entriesToImport = selectedEntries;
+    const config = configFor(browseState.directory);
+    setSelectedHrefs([]);
+    void startWebDavImport(config, entriesToImport).catch(() => {});
   };
 
   const closeToHome = () => {
@@ -230,7 +236,13 @@ export default function WebDavScreen() {
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: colors.background }]}>
       <View style={styles.topBar}>
-        <Pressable accessibilityRole="button" accessibilityLabel="返回" onPress={goBack} style={[styles.iconButton, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="返回"
+          accessibilityState={{ disabled: loading }}
+          disabled={loading}
+          onPress={goBack}
+          style={[styles.iconButton, { borderColor: colors.border, backgroundColor: colors.surface }, loading && styles.disabledControl]}>
           <ChevronLeft size={24} color={colors.text} />
         </Pressable>
         <View style={styles.titleCopy}>
@@ -246,19 +258,25 @@ export default function WebDavScreen() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="关闭 WebDAV 浏览"
+              disabled={loading}
               onPress={closeToHome}
-              style={({ pressed }) => [styles.iconButton, { borderColor: colors.border, backgroundColor: colors.surface }, pressed && styles.pressed]}>
+              style={({ pressed }) => [
+                styles.iconButton,
+                { borderColor: colors.border, backgroundColor: colors.surface },
+                loading && styles.disabledControl,
+                pressed && styles.pressed,
+              ]}>
               <X size={22} color={colors.text} />
             </Pressable>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="导入所选内容"
-              disabled={selectedEntries.length === 0 || importing}
+              disabled={selectedEntries.length === 0 || importing || loading}
               onPress={importSelection}
               style={({ pressed }) => [
                 styles.actionButton,
                 { backgroundColor: colors.text },
-                selectedEntries.length === 0 && styles.actionButtonDisabled,
+                (selectedEntries.length === 0 || loading) && styles.actionButtonDisabled,
                 pressed && styles.pressed,
               ]}>
               {importing ? <ActivityIndicator color={colors.surface} /> : <Download size={20} color={colors.surface} />}
@@ -266,11 +284,17 @@ export default function WebDavScreen() {
             </Pressable>
           </View>
         ) : (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="添加目录"
-            onPress={openAddDirectory}
-            style={({ pressed }) => [styles.iconButton, { borderColor: colors.border, backgroundColor: colors.surface }, pressed && styles.pressed]}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="添加目录"
+              disabled={loading || importing}
+              onPress={openAddDirectory}
+              style={({ pressed }) => [
+                styles.iconButton,
+                { borderColor: colors.border, backgroundColor: colors.surface },
+                (loading || importing) && styles.disabledControl,
+                pressed && styles.pressed,
+              ]}>
             <Plus size={24} color={colors.text} />
           </Pressable>
         )}
@@ -285,7 +309,7 @@ export default function WebDavScreen() {
             <View style={styles.browserHeader}>
               <Text style={[styles.sectionTitle, { color: colors.text }]}>目录内容</Text>
               <Text style={[styles.browserMeta, { color: colors.textSecondary }]}>
-                已选择 {selectedEntries.length} 项{importProgress ? `，已导入 ${importProgress.completed}/${importProgress.total}` : ''}
+                已选择 {selectedEntries.length} 项{importing ? `，导入中 ${webDavImport.completed}/${webDavImport.total}` : ''}
               </Text>
             </View>
           }
@@ -297,7 +321,7 @@ export default function WebDavScreen() {
               entry={item}
               colors={colors}
               selected={selectedHrefSet.has(item.href)}
-              disabled={importing}
+              disabled={importing || loading}
               onToggle={() => toggleSelected(item.href)}
               onPress={() => openEntry(item)}
             />
@@ -316,6 +340,7 @@ export default function WebDavScreen() {
             <DirectoryCard
               directory={item}
               colors={colors}
+              disabled={loading || importing}
               onPress={() => openDirectory(item)}
               onEdit={() => openEditDirectory(item)}
               onDelete={() => deleteDirectory(item)}
@@ -323,6 +348,8 @@ export default function WebDavScreen() {
           )}
         />
       )}
+
+      {loading ? <DirectoryLoadingOverlay colors={colors} /> : null}
 
       <DirectoryModal
         visible={modalOpen}
@@ -340,12 +367,14 @@ export default function WebDavScreen() {
 function DirectoryCard({
   directory,
   colors,
+  disabled,
   onPress,
   onEdit,
   onDelete,
 }: {
   directory: WebDavDirectory;
   colors: AppColors;
+  disabled: boolean;
   onPress: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -355,8 +384,10 @@ function DirectoryCard({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`浏览 ${directory.name}`}
+        accessibilityState={{ disabled }}
+        disabled={disabled}
         onPress={onPress}
-        style={({ pressed }) => [styles.directoryMain, pressed && styles.pressed]}>
+        style={({ pressed }) => [styles.directoryMain, disabled && styles.disabledControl, pressed && styles.pressed]}>
         <View style={[styles.directoryIcon, { borderColor: colors.border, backgroundColor: colors.backgroundElement }]}>
           <Server size={24} color={colors.text} />
         </View>
@@ -374,17 +405,38 @@ function DirectoryCard({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`编辑 ${directory.name}`}
+          accessibilityState={{ disabled }}
+          disabled={disabled}
           onPress={onEdit}
-          style={({ pressed }) => [styles.cardIconButton, { backgroundColor: colors.surface }, pressed && styles.pressed]}>
+          style={({ pressed }) => [styles.cardIconButton, { backgroundColor: colors.surface }, disabled && styles.disabledControl, pressed && styles.pressed]}>
           <Pencil size={20} color={colors.text} />
         </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`删除 ${directory.name}`}
+          accessibilityState={{ disabled }}
+          disabled={disabled}
           onPress={onDelete}
-          style={({ pressed }) => [styles.cardIconButton, styles.dangerIconButton, { backgroundColor: colors.surface, borderTopColor: colors.border }, pressed && styles.pressed]}>
+          style={({ pressed }) => [
+            styles.cardIconButton,
+            styles.dangerIconButton,
+            { backgroundColor: colors.surface, borderTopColor: colors.border },
+            disabled && styles.disabledControl,
+            pressed && styles.pressed,
+          ]}>
           <Trash2 size={20} color={colors.danger} />
         </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function DirectoryLoadingOverlay({ colors }: { colors: AppColors }) {
+  return (
+    <View style={styles.loadingOverlay} pointerEvents="auto">
+      <View style={[styles.loadingCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+        <ActivityIndicator color={colors.text} />
+        <Text style={[styles.loadingText, { color: colors.textSecondary }]}>正在读取目录...</Text>
       </View>
     </View>
   );
@@ -735,6 +787,29 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.72,
+  },
+  disabledControl: {
+    opacity: 0.48,
+  },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.three,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  loadingCard: {
+    minWidth: 156,
+    minHeight: 72,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.two,
+  },
+  loadingText: {
+    fontSize: 13,
+    fontWeight: '800',
   },
   content: {
     padding: Spacing.three,
