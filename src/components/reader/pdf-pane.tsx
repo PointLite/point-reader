@@ -9,15 +9,17 @@ type PdfPaneProps = {
   book: Book;
   colors: AppColors;
   seekRequest?: { progress: number; nonce: number } | null;
+  turnRequest?: { delta: -1 | 1; nonce: number } | null;
   onProgress: (progress: number, chapter: number, offset: number) => void;
   onToggleToolbar: () => void;
 };
 
-export function PdfPane({ book, colors, seekRequest, onProgress, onToggleToolbar }: PdfPaneProps) {
+export function PdfPane({ book, colors, seekRequest, turnRequest, onProgress, onToggleToolbar }: PdfPaneProps) {
   const pdfRef = useRef<PdfRef>(null);
   const initialPage = useRef(Math.max(1, book.currentChapter || 1)).current;
   const source = useMemo(() => ({ uri: book.fileUri }), [book.fileUri]);
   const [pageCount, setPageCount] = useState(0);
+  const currentPageRef = useRef(initialPage);
 
   useEffect(() => {
     if (!seekRequest || pageCount <= 0) return;
@@ -25,6 +27,14 @@ export function PdfPane({ book, colors, seekRequest, onProgress, onToggleToolbar
     pdfRef.current?.setPage(targetPage);
     onProgress(pdfPageToProgress(targetPage, pageCount), targetPage, targetPage);
   }, [onProgress, pageCount, seekRequest]);
+
+  useEffect(() => {
+    if (!turnRequest || pageCount <= 0) return;
+    const targetPage = Math.max(1, Math.min(pageCount, currentPageRef.current + turnRequest.delta));
+    pdfRef.current?.setPage(targetPage);
+    currentPageRef.current = targetPage;
+    onProgress(pdfPageToProgress(targetPage, pageCount), targetPage, targetPage);
+  }, [onProgress, pageCount, turnRequest]);
 
   return (
     <Pdf
@@ -34,7 +44,10 @@ export function PdfPane({ book, colors, seekRequest, onProgress, onToggleToolbar
       page={initialPage}
       enablePaging={false}
       onLoadComplete={(total) => setPageCount(total)}
-      onPageChanged={(page, total) => onProgress(pdfPageToProgress(page, total), page, page)}
+      onPageChanged={(page, total) => {
+        currentPageRef.current = page;
+        onProgress(pdfPageToProgress(page, total), page, page);
+      }}
       onPageSingleTap={onToggleToolbar}
     />
   );

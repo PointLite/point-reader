@@ -21,6 +21,12 @@ export type Book = {
   groupId?: string | null;
 };
 
+export type BookGroup = {
+  id: string;
+  name: string;
+  createdAt: number;
+};
+
 export type ReadingSettings = {
   mode: ReadingMode;
   colorScheme: ReaderColorScheme;
@@ -35,6 +41,7 @@ export type ReadingSettings = {
   lineHeightScale: number;
   alwaysShowStatusBar: boolean;
   keepAwake: boolean;
+  einkOptimization: boolean;
 };
 
 export type ReaderChapter = {

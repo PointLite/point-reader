@@ -2,7 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import { getDb } from '@/lib/db';
 import { extractEpubMetadata } from '@/lib/epubMetadata';
-import type { Book, BookFormat, SortState } from '@/types/reader';
+import type { Book, BookFormat, BookGroup, SortState } from '@/types/reader';
 
 type BookRow = Omit<Book, 'progress' | 'currentOffset'> & {
   progress: number;
@@ -69,6 +69,41 @@ export async function searchBooks(query: string, sort: SortState): Promise<Book[
   return books.filter((book) =>
     `${book.title} ${book.author}`.toLocaleLowerCase().includes(needle)
   );
+}
+
+export async function listGroups(): Promise<BookGroup[]> {
+  const db = await getDb();
+  return db.getAllAsync<BookGroup>('SELECT * FROM groups ORDER BY createdAt ASC');
+}
+
+export async function createGroupForBooks(bookIds: string[], name?: string): Promise<BookGroup> {
+  const db = await getDb();
+  const now = Date.now();
+  const group: BookGroup = {
+    id: `${now}-${Math.random().toString(36).slice(2)}`,
+    name: name?.trim() || `文件夹 ${new Date(now).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}`,
+    createdAt: now,
+  };
+  await db.runAsync('INSERT INTO groups (id, name, createdAt) VALUES (?, ?, ?)', group.id, group.name, group.createdAt);
+  for (const id of bookIds) {
+    await db.runAsync('UPDATE books SET groupId = ?, updatedAt = ? WHERE id = ?', group.id, now, id);
+  }
+  return group;
+}
+
+export async function updateGroupName(id: string, name: string) {
+  const nextName = name.trim();
+  if (!nextName) return;
+  const db = await getDb();
+  await db.runAsync('UPDATE groups SET name = ? WHERE id = ?', nextName, id);
+}
+
+export async function clearBooksGroup(bookIds: string[]) {
+  const db = await getDb();
+  const now = Date.now();
+  for (const id of bookIds) {
+    await db.runAsync('UPDATE books SET groupId = NULL, updatedAt = ? WHERE id = ?', now, id);
+  }
 }
 
 export async function getBook(id: string): Promise<Book | null> {

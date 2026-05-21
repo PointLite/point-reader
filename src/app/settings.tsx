@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SettingRow } from '@/components/setting-row';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
+import { animateLayoutIfEnabled } from '@/lib/motion';
 import { defaultReadingSettings, loadReadingSettings, saveReadingSettings } from '@/lib/settings';
 import { appThemeFor } from '@/lib/theme';
 import type { ReadingSettings } from '@/types/reader';
@@ -24,6 +25,7 @@ export default function SettingsScreen() {
 
   const update = async (patch: Partial<ReadingSettings>) => {
     const next = { ...settings, ...patch };
+    animateLayoutIfEnabled(settings.einkOptimization);
     setSettings(next);
     await saveReadingSettings(next);
   };
@@ -55,6 +57,13 @@ export default function SettingsScreen() {
           description="进入阅读页时阻止自动锁屏。"
           value={settings.keepAwake}
           onValueChange={(value) => update({ keepAwake: value })}
+        />
+        <SettingRow
+          colors={colors}
+          title="墨水屏优化"
+          description="开启后关闭除加载指示以外的界面动画，减少电子墨水屏残影和刷新。"
+          value={settings.einkOptimization}
+          onValueChange={(value) => update({ einkOptimization: value })}
         />
 
         <View style={[styles.panel, { borderColor: colors.border, backgroundColor: colors.surface }]}>

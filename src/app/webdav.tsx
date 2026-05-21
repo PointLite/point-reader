@@ -30,6 +30,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
+import { modalAnimationType, useEinkOptimization } from '@/lib/motion';
 import { useAppTheme, type AppColors } from '@/lib/theme';
 import { listWebDav, type WebDavConfig } from '@/lib/webdav';
 import { startWebDavImport, useWebDavImport } from '@/lib/webdavImportQueue';
@@ -46,6 +47,7 @@ type BrowseState = {
 
 export default function WebDavScreen() {
   const { colors } = useAppTheme();
+  const einkOptimization = useEinkOptimization();
   const [directories, setDirectories] = useState<WebDavDirectory[]>([]);
   const [entries, setEntries] = useState<WebDavEntry[]>([]);
   const [selectedHrefs, setSelectedHrefs] = useState<string[]>([]);
@@ -320,6 +322,7 @@ export default function WebDavScreen() {
             <WebDavEntryRow
               entry={item}
               colors={colors}
+              einkOptimization={einkOptimization}
               selected={selectedHrefSet.has(item.href)}
               disabled={importing || loading}
               onToggle={() => toggleSelected(item.href)}
@@ -354,6 +357,7 @@ export default function WebDavScreen() {
       <DirectoryModal
         visible={modalOpen}
         colors={colors}
+        einkOptimization={einkOptimization}
         editing={Boolean(editingDirectory)}
         form={form}
         onChange={setForm}
@@ -445,6 +449,7 @@ function DirectoryLoadingOverlay({ colors }: { colors: AppColors }) {
 function WebDavEntryRow({
   entry,
   colors,
+  einkOptimization,
   selected,
   disabled,
   onToggle,
@@ -452,6 +457,7 @@ function WebDavEntryRow({
 }: {
   entry: WebDavEntry;
   colors: AppColors;
+  einkOptimization: boolean;
   selected: boolean;
   disabled: boolean;
   onToggle: () => void;
@@ -485,7 +491,7 @@ function WebDavEntryRow({
           <FileText size={24} color={colors.textSecondary} />
         )}
         <View style={styles.entryCopy}>
-          <AutoScrollText text={entry.name} textStyle={[styles.entryName, { color: colors.text }]} />
+          <AutoScrollText text={entry.name} textStyle={[styles.entryName, { color: colors.text }]} disabled={einkOptimization} />
           {fileMeta ? <Text style={[styles.entryMeta, { color: colors.textSecondary }]}>{fileMeta}</Text> : null}
         </View>
         {entry.type === 'directory' ? <ChevronRight size={20} color={colors.textSecondary} /> : null}
@@ -498,6 +504,7 @@ function DirectoryModal({
   visible,
   editing,
   colors,
+  einkOptimization,
   form,
   onChange,
   onClose,
@@ -506,13 +513,14 @@ function DirectoryModal({
   visible: boolean;
   editing: boolean;
   colors: AppColors;
+  einkOptimization: boolean;
   form: { name: string; url: string; username: string; password: string };
   onChange: (form: { name: string; url: string; username: string; password: string }) => void;
   onClose: () => void;
   onSave: () => void;
 }) {
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType={modalAnimationType(einkOptimization)} onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
         <View style={[styles.modalCard, { borderColor: colors.text, backgroundColor: colors.surface }]}>
           <View style={styles.modalHeader}>
@@ -608,9 +616,11 @@ function EmptyState({ loading, text, colors }: { loading: boolean; text: string;
 const AutoScrollText = memo(function AutoScrollText({
   text,
   textStyle,
+  disabled,
 }: {
   text: string;
   textStyle: TextStyle | TextStyle[];
+  disabled: boolean;
 }) {
   const translateX = useRef(new Animated.Value(0)).current;
   const [containerWidth, setContainerWidth] = useState(0);
@@ -622,6 +632,7 @@ const AutoScrollText = memo(function AutoScrollText({
   useEffect(() => {
     translateX.stopAnimation();
     translateX.setValue(0);
+    if (disabled) return;
     if (overflow <= 2) return;
 
     const animation = Animated.loop(
@@ -644,7 +655,7 @@ const AutoScrollText = memo(function AutoScrollText({
     return () => {
       animation.stop();
     };
-  }, [overflow, translateX]);
+  }, [disabled, overflow, translateX]);
 
   return (
     <View

@@ -32,6 +32,7 @@ export async function getDb() {
     );
   `);
   await ensureColumn(db, 'books', 'currentLocation', 'TEXT');
+  await ensureColumn(db, 'books', 'groupId', 'TEXT');
 
   return db;
 }

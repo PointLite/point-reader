@@ -3,9 +3,11 @@ import {
   ArrowDownAZ,
   ArrowUpAZ,
   Check,
+  ChevronLeft,
   CircleEllipsis,
   Cloud,
   FilePlus2,
+  Folder,
   FolderPlus,
   Info,
   Plus,
@@ -18,7 +20,9 @@ import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from '
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
+  Image,
   Modal,
   Pressable,
   StyleSheet,
@@ -32,14 +36,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { BookCard } from '@/components/book-card';
 import { InkButton } from '@/components/ink-button';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
-import { deleteBooks, searchBooks } from '@/lib/books';
+import { clearBooksGroup, createGroupForBooks, deleteBooks, listGroups, searchBooks, updateGroupName } from '@/lib/books';
 import { importPickedBooks } from '@/lib/importBooks';
+import { INTERACTION_ANIMATION_MS, animateLayoutIfEnabled, modalAnimationType, useEinkOptimization } from '@/lib/motion';
 import { loadSortState, saveSortState } from '@/lib/settings';
 import { useAppTheme, type AppColors } from '@/lib/theme';
 import { useWebDavImport, type WebDavImportSnapshot } from '@/lib/webdavImportQueue';
-import type { Book, SortField, SortState } from '@/types/reader';
+import type { Book, BookGroup, SortField, SortState } from '@/types/reader';
 
-type ShelfItem = { type: 'book'; book: Book } | { type: 'import' };
+type FolderItem = BookGroup & { books: Book[] };
+type ShelfItem = { type: 'book'; book: Book } | { type: 'folder'; folder: FolderItem } | { type: 'import' };
 
 const sortLabels: Record<SortField, string> = {
   updatedAt: '最近',
@@ -53,40 +59,91 @@ const SORT_POPOVER_WIDTH = 156;
 export default function ShelfScreen() {
   const { width, height } = useWindowDimensions();
   const { colors } = useAppTheme();
+  const einkOptimization = useEinkOptimization();
   const [books, setBooks] = useState<Book[]>([]);
+  const [groups, setGroups] = useState<BookGroup[]>([]);
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [showImportOptions, setShowImportOptions] = useState(false);
+  const [renameGroupOpen, setRenameGroupOpen] = useState(false);
+  const [renameGroupName, setRenameGroupName] = useState('');
   const [sort, setSort] = useState<SortState>({ field: 'title', direction: 'asc' });
   const [showSort, setShowSort] = useState(false);
   const [sortMenuFrame, setSortMenuFrame] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const moreButtonRef = useRef<View>(null);
   const queryRef = useRef('');
   const sortRef = useRef<SortState>({ field: 'title', direction: 'asc' });
   const handledWebDavImportRef = useRef(0);
+  const importSheetProgress = useRef(new Animated.Value(0)).current;
   const webDavImport = useWebDavImport();
 
-  const selectionMode = selectedIds.length > 0;
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const gridGap = Spacing.three;
   const horizontalPadding = Spacing.three * 2;
   const bookWidth = Math.floor((width - horizontalPadding - gridGap * 2) / 3);
-  const shelfItems: ShelfItem[] = useMemo(
-    () => [
-      ...books.map((book) => ({ type: 'book' as const, book })),
-      { type: 'import' },
-    ],
-    [books]
+  const activeGroup = useMemo(
+    () => groups.find((group) => group.id === activeGroupId) ?? null,
+    [activeGroupId, groups]
   );
+  const booksByGroupId = useMemo(() => {
+    const next = new Map<string, Book[]>();
+    for (const book of books) {
+      if (!book.groupId) continue;
+      const groupBooks = next.get(book.groupId);
+      if (groupBooks) {
+        groupBooks.push(book);
+      } else {
+        next.set(book.groupId, [book]);
+      }
+    }
+    return next;
+  }, [books]);
+  const folders = useMemo<FolderItem[]>(
+    () =>
+      groups
+        .map((group) => ({
+          ...group,
+          books: booksByGroupId.get(group.id) ?? [],
+        }))
+        .filter((group) => group.books.length > 0),
+    [booksByGroupId, groups]
+  );
+  const folderSelection = useMemo(
+    () => folders.find((folder) => folder.id === selectedFolderId) ?? null,
+    [folders, selectedFolderId]
+  );
+  const selectionMode = selectedIds.length > 0 || Boolean(folderSelection);
+  const bookSelectionMode = selectedIds.length > 0;
+  const hasListHeader = Boolean(activeGroup) || webDavImport.status !== 'idle';
+  const shelfItems: ShelfItem[] = useMemo(() => {
+    if (activeGroupId) {
+      return books
+        .filter((book) => book.groupId === activeGroupId)
+        .map((book) => ({ type: 'book' as const, book }));
+    }
+
+    const rootBooks = books
+      .filter((book) => !book.groupId)
+      .map((book) => ({ type: 'book' as const, book }));
+    return [
+      ...folders.map((folder) => ({ type: 'folder' as const, folder })),
+      ...rootBooks,
+      { type: 'import' },
+    ];
+  }, [activeGroupId, books, folders]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     const nextSort = await loadSortState();
     sortRef.current = nextSort;
     setSort(nextSort);
-    setBooks(await searchBooks(queryRef.current, nextSort));
+    const [nextBooks, nextGroups] = await Promise.all([searchBooks(queryRef.current, nextSort), listGroups()]);
+    setBooks(nextBooks);
+    setGroups(nextGroups);
     setLoading(false);
   }, []);
 
@@ -103,9 +160,22 @@ export default function ShelfScreen() {
     void refresh();
   }, [refresh, webDavImport.status, webDavImport.updatedAt]);
 
+  useEffect(() => {
+    if (!showImportOptions) return;
+    importSheetProgress.stopAnimation();
+    importSheetProgress.setValue(einkOptimization ? 1 : 0);
+    if (einkOptimization) return;
+    Animated.timing(importSheetProgress, {
+      toValue: 1,
+      duration: INTERACTION_ANIMATION_MS,
+      useNativeDriver: true,
+    }).start();
+  }, [einkOptimization, importSheetProgress, showImportOptions]);
+
   const selectedCount = selectedIds.length;
 
   const toggleSortMenu = () => {
+    animateLayoutIfEnabled(einkOptimization);
     if (showSort) {
       setShowSort(false);
       return;
@@ -146,22 +216,127 @@ export default function ShelfScreen() {
     }
   }, [refresh]);
 
+  const closeImportOptions = useCallback(
+    (afterClose?: () => void) => {
+      if (!showImportOptions) {
+        afterClose?.();
+        return;
+      }
+      if (einkOptimization) {
+        setShowImportOptions(false);
+        afterClose?.();
+        return;
+      }
+      importSheetProgress.stopAnimation();
+      Animated.timing(importSheetProgress, {
+        toValue: 0,
+        duration: INTERACTION_ANIMATION_MS,
+        useNativeDriver: true,
+      }).start(() => {
+        setShowImportOptions(false);
+        afterClose?.();
+      });
+    },
+    [einkOptimization, importSheetProgress, showImportOptions]
+  );
+
   const onImport = () => {
-    setShowImportOptions(false);
-    setTimeout(() => {
+    animateLayoutIfEnabled(einkOptimization);
+    closeImportOptions(() => {
       void runLocalImport();
-    }, 260);
+    });
   };
 
   const openImportOptions = useCallback(() => {
+    animateLayoutIfEnabled(einkOptimization);
     setShowImportOptions(true);
-  }, []);
+  }, [einkOptimization]);
 
   const toggleSelected = useCallback((id: string) => {
+    animateLayoutIfEnabled(einkOptimization);
+    setSelectedFolderId(null);
     setSelectedIds((current) =>
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
     );
+  }, [einkOptimization]);
+
+  const selectFolder = useCallback((groupId: string) => {
+    animateLayoutIfEnabled(einkOptimization);
+    setSelectedIds([]);
+    setSelectedFolderId((current) => (current === groupId ? null : groupId));
+  }, [einkOptimization]);
+
+  const enterGroup = useCallback((groupId: string) => {
+    setSelectedIds([]);
+    setSelectedFolderId(null);
+    setActiveGroupId(groupId);
   }, []);
+
+  const leaveGroup = useCallback(() => {
+    setSelectedIds([]);
+    setSelectedFolderId(null);
+    setActiveGroupId(null);
+  }, []);
+
+  const createGroupSelection = () => {
+    if (selectedCount < 2) return;
+    Alert.alert('创建文件夹', `将已选 ${selectedCount} 本书归类到一个文件夹中？`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '创建',
+        onPress: async () => {
+          const nextGroup = await createGroupForBooks(selectedIds);
+          setSelectedIds([]);
+          setActiveGroupId(null);
+          await refresh();
+          setActiveGroupId(nextGroup.id);
+        },
+      },
+    ]);
+  };
+
+  const ungroupSelection = () => {
+    if (!activeGroupId || selectedCount < 1) return;
+    Alert.alert('取消分组', `将已选 ${selectedCount} 本书移出当前文件夹？`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '移出',
+        onPress: async () => {
+          await clearBooksGroup(selectedIds);
+          setSelectedIds([]);
+          await refresh();
+        },
+      },
+    ]);
+  };
+
+  const ungroupSelectedFolder = () => {
+    if (!folderSelection) return;
+    Alert.alert('取消分组', `将“${folderSelection.name}”中的 ${folderSelection.books.length} 本书移出文件夹？`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '移出',
+        onPress: async () => {
+          await clearBooksGroup(folderSelection.books.map((book) => book.id));
+          setSelectedFolderId(null);
+          await refresh();
+        },
+      },
+    ]);
+  };
+
+  const openRenameGroup = () => {
+    if (!activeGroup) return;
+    setRenameGroupName(activeGroup.name);
+    setRenameGroupOpen(true);
+  };
+
+  const saveRenameGroup = async () => {
+    if (!activeGroup) return;
+    await updateGroupName(activeGroup.id, renameGroupName);
+    setRenameGroupOpen(false);
+    await refresh();
+  };
 
   const deleteSelection = () => {
     Alert.alert('删除书籍', `确定删除已选 ${selectedCount} 本书？`, [
@@ -184,19 +359,32 @@ export default function ShelfScreen() {
     setBooks(await searchBooks(text, sortRef.current));
   }, []);
 
-  const keyExtractor = useCallback((item: ShelfItem) => (item.type === 'book' ? item.book.id : 'import-tile'), []);
+  const keyExtractor = useCallback((item: ShelfItem) => {
+    if (item.type === 'book') return item.book.id;
+    if (item.type === 'folder') return `folder-${item.folder.id}`;
+    return 'import-tile';
+  }, []);
 
   const renderShelfItem = useCallback(
     ({ item }: { item: ShelfItem }) =>
       item.type === 'import' ? (
         <ImportTile width={bookWidth} importing={importing} colors={colors} onPress={openImportOptions} />
+      ) : item.type === 'folder' ? (
+        <FolderCard
+          folder={item.folder}
+          width={bookWidth}
+          colors={colors}
+          selected={selectedFolderId === item.folder.id}
+          onPress={() => enterGroup(item.folder.id)}
+          onLongPress={() => selectFolder(item.folder.id)}
+        />
       ) : (
         <BookCard
           book={item.book}
           width={bookWidth}
           colors={colors}
           selected={selectedIdSet.has(item.book.id)}
-          selectionMode={selectionMode}
+          selectionMode={bookSelectionMode}
           onLongPress={() => toggleSelected(item.book.id)}
           onPress={() => {
             if (selectionMode) {
@@ -207,7 +395,7 @@ export default function ShelfScreen() {
           }}
         />
       ),
-    [bookWidth, colors, importing, openImportOptions, selectedIdSet, selectionMode, toggleSelected]
+    [bookSelectionMode, bookWidth, colors, enterGroup, importing, openImportOptions, selectFolder, selectedFolderId, selectedIdSet, selectionMode, toggleSelected]
   );
 
   return (
@@ -232,9 +420,15 @@ export default function ShelfScreen() {
           columnWrapperStyle={[styles.gridRow, { gap: gridGap }]}
           contentContainerStyle={[styles.gridContent, selectionMode && styles.listWithSheet]}
           ListHeaderComponent={
-            webDavImport.status === 'idle' ? null : (
-              <WebDavImportProgressRow colors={colors} state={webDavImport} />
-            )
+            hasListHeader ? (
+              <ShelfListHeader
+                colors={colors}
+                activeGroup={activeGroup}
+                webDavImport={webDavImport}
+                onBack={leaveGroup}
+                onRename={openRenameGroup}
+              />
+            ) : undefined
           }
           renderItem={renderShelfItem}
         />
@@ -242,22 +436,36 @@ export default function ShelfScreen() {
 
       {selectionMode ? (
         <View style={[styles.selectionSheet, { borderColor: colors.text, backgroundColor: colors.surface }]}>
-          <Text style={[styles.selectionTitle, { color: colors.text }]}>已选择 {selectedCount} 本</Text>
+          <Text style={[styles.selectionTitle, { color: colors.text }]}>
+            {folderSelection ? `已选择 1 个文件夹` : `已选择 ${selectedCount} 本`}
+          </Text>
           <View style={styles.sheetActions}>
-            <InkButton colors={colors} label="分组" icon={FolderPlus} onPress={() => Alert.alert('分组', '第一版会保留分组入口，数据结构已准备。')} />
-            <InkButton
-              colors={colors}
-              label="详情"
-              icon={Info}
-              disabled={selectedCount !== 1}
-              onPress={() => router.push({ pathname: '/book/[bookId]', params: { bookId: selectedIds[0] } })}
-            />
-            <InkButton colors={colors} label="删除" icon={Trash2} variant="danger" onPress={deleteSelection} />
+            {folderSelection ? (
+              <InkButton colors={colors} label="取消分组" icon={FolderPlus} onPress={ungroupSelectedFolder} />
+            ) : (
+              <>
+                <InkButton
+                  colors={colors}
+                  label={activeGroupId ? '取消分组' : '分组'}
+                  icon={FolderPlus}
+                  disabled={activeGroupId ? selectedCount < 1 : selectedCount < 2}
+                  onPress={activeGroupId ? ungroupSelection : createGroupSelection}
+                />
+                <InkButton
+                  colors={colors}
+                  label="详情"
+                  icon={Info}
+                  disabled={selectedCount !== 1}
+                  onPress={() => router.push({ pathname: '/book/[bookId]', params: { bookId: selectedIds[0] } })}
+                />
+                <InkButton colors={colors} label="删除" icon={Trash2} variant="danger" onPress={deleteSelection} />
+              </>
+            )}
           </View>
         </View>
       ) : null}
 
-      <Modal visible={showSort} transparent animationType="none" onRequestClose={() => setShowSort(false)}>
+      <Modal visible={showSort} transparent animationType={modalAnimationType(einkOptimization)} onRequestClose={() => setShowSort(false)}>
         <View style={styles.sortModalLayer}>
           <Pressable
             accessibilityRole="button"
@@ -328,15 +536,29 @@ export default function ShelfScreen() {
         </View>
       </Modal>
 
-      <Modal visible={showImportOptions} transparent animationType="fade" onRequestClose={() => setShowImportOptions(false)}>
+      <Modal visible={showImportOptions} transparent animationType="none" onRequestClose={() => closeImportOptions()}>
         <View style={styles.importModalLayer}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="关闭导入方式"
-            onPress={() => setShowImportOptions(false)}
+            onPress={() => closeImportOptions()}
             style={StyleSheet.absoluteFillObject}
           />
-          <View style={[styles.importSheet, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+          <Animated.View
+            style={[
+              styles.importSheet,
+              { borderColor: colors.border, backgroundColor: colors.surface },
+              {
+                transform: [
+                  {
+                    translateY: importSheetProgress.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [360, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}>
             <Text style={[styles.importSheetTitle, { color: colors.text }]}>添加书籍</Text>
             <Text style={[styles.importSheetHint, { color: colors.textSecondary }]}>选择导入来源</Text>
             <View style={styles.importActions}>
@@ -353,15 +575,84 @@ export default function ShelfScreen() {
                 title="WebDAV"
                 description="浏览已保存的 WebDAV 目录"
                 onPress={() => {
-                  setShowImportOptions(false);
-                  router.push('/webdav');
+                  closeImportOptions(() => router.push('/webdav'));
                 }}
               />
+            </View>
+          </Animated.View>
+        </View>
+      </Modal>
+
+      <Modal visible={renameGroupOpen} transparent animationType={modalAnimationType(einkOptimization)} onRequestClose={() => setRenameGroupOpen(false)}>
+        <View style={styles.renameModalLayer}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="关闭重命名"
+            onPress={() => setRenameGroupOpen(false)}
+            style={StyleSheet.absoluteFillObject}
+          />
+          <View style={[styles.renameCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+            <Text style={[styles.renameTitle, { color: colors.text }]}>修改文件夹名称</Text>
+            <TextInput
+              accessibilityLabel="文件夹名称"
+              value={renameGroupName}
+              onChangeText={setRenameGroupName}
+              autoFocus
+              selectTextOnFocus
+              style={[styles.renameInput, { borderColor: colors.border, color: colors.text }]}
+            />
+            <View style={styles.renameActions}>
+              <InkButton colors={colors} label="取消" variant="quiet" onPress={() => setRenameGroupOpen(false)} />
+              <InkButton colors={colors} label="保存" variant="primary" disabled={!renameGroupName.trim()} onPress={saveRenameGroup} />
             </View>
           </View>
         </View>
       </Modal>
     </SafeAreaView>
+  );
+}
+
+function ShelfListHeader({
+  colors,
+  activeGroup,
+  webDavImport,
+  onBack,
+  onRename,
+}: {
+  colors: AppColors;
+  activeGroup: BookGroup | null;
+  webDavImport: WebDavImportSnapshot;
+  onBack: () => void;
+  onRename: () => void;
+}) {
+  if (!activeGroup && webDavImport.status === 'idle') return null;
+
+  return (
+    <View style={styles.listHeaderStack}>
+      {webDavImport.status === 'idle' ? null : (
+        <WebDavImportProgressRow colors={colors} state={webDavImport} />
+      )}
+      {activeGroup ? (
+        <View style={[styles.groupHeader, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="返回书架"
+            onPress={onBack}
+            style={({ pressed }) => [styles.groupBackButton, pressed && styles.sortMenuItemPressed]}>
+            <ChevronLeft size={22} color={colors.text} strokeWidth={2.4} />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="修改文件夹名称"
+            onPress={onRename}
+            style={({ pressed }) => [styles.groupHeaderCopy, pressed && styles.sortMenuItemPressed]}>
+            <Text style={[styles.groupHeaderTitle, { color: colors.text }]} numberOfLines={1}>
+              {activeGroup.name}
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -399,6 +690,63 @@ function WebDavImportProgressRow({
         <View style={[styles.webDavImportFill, { backgroundColor: colors.text, width: `${progress * 100}%` }]} />
       </View>
     </View>
+  );
+}
+
+function FolderCard({
+  folder,
+  width,
+  colors,
+  selected,
+  onPress,
+  onLongPress,
+}: {
+  folder: FolderItem;
+  width: number;
+  colors: AppColors;
+  selected: boolean;
+  onPress: () => void;
+  onLongPress: () => void;
+}) {
+  const previews = folder.books.slice(0, 9);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${folder.name}，${folder.books.length} 本书`}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      style={({ pressed }) => [styles.folderCard, { width }, pressed && styles.sortMenuItemPressed]}>
+      <View
+        style={[
+          styles.folderCover,
+          { height: width * 1.44, borderColor: selected ? colors.text : colors.border, backgroundColor: colors.surface },
+          selected && styles.folderCoverSelected,
+        ]}>
+        <View style={[styles.folderTab, { borderColor: colors.border, backgroundColor: colors.backgroundElement }]} />
+        <View style={styles.folderPreviewGrid}>
+          {previews.map((book) => (
+            <View key={book.id} style={[styles.folderPreview, { borderColor: colors.border, backgroundColor: colors.background }]}>
+              {book.coverUri ? (
+                <Image source={{ uri: book.coverUri }} style={styles.folderPreviewImage} resizeMode="cover" />
+              ) : (
+                <Folder size={14} color={colors.textSecondary} strokeWidth={2} />
+              )}
+            </View>
+          ))}
+        </View>
+        {selected ? (
+          <View style={[styles.folderSelectedBadge, { backgroundColor: colors.text }]}>
+            <Check size={18} color={colors.surface} strokeWidth={3} />
+          </View>
+        ) : null}
+      </View>
+      <View style={styles.meta}>
+        <Text style={[styles.folderTitle, { color: colors.text }]} numberOfLines={2}>
+          {folder.name}
+        </Text>
+        <Text style={[styles.folderCount, { color: colors.textSecondary }]}>{folder.books.length} 本书</Text>
+      </View>
+    </Pressable>
   );
 }
 
@@ -535,6 +883,37 @@ const styles = StyleSheet.create({
   },
   gridRow: {
     alignItems: 'flex-start',
+  },
+  listHeaderStack: {
+    gap: Spacing.two,
+  },
+  groupHeader: {
+    minHeight: 58,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    paddingHorizontal: Spacing.two,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  groupBackButton: {
+    width: TouchTarget,
+    height: TouchTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  groupHeaderCopy: {
+    flex: 1,
+    minHeight: TouchTarget,
+    justifyContent: 'center',
+  },
+  groupHeaderTitle: {
+    fontSize: 18,
+    lineHeight: 22,
+    fontWeight: '900',
+    color: Colors.light.text,
   },
   webDavImportRow: {
     minHeight: 58,
@@ -752,6 +1131,41 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.light.textSecondary,
   },
+  renameModalLayer: {
+    flex: 1,
+    padding: Spacing.three,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    justifyContent: 'center',
+  },
+  renameCard: {
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    padding: Spacing.three,
+    gap: Spacing.three,
+  },
+  renameTitle: {
+    fontSize: 20,
+    lineHeight: 24,
+    fontWeight: '900',
+    color: Colors.light.text,
+  },
+  renameInput: {
+    minHeight: TouchTarget,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingHorizontal: Spacing.three,
+    fontSize: 17,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  renameActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: Spacing.two,
+  },
   importTile: {
     borderRadius: Radius.medium,
     borderWidth: 1,
@@ -759,6 +1173,83 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.surface,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  folderCard: {
+    gap: Spacing.two,
+  },
+  folderCover: {
+    width: '100%',
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    padding: Spacing.two,
+    overflow: 'hidden',
+  },
+  folderCoverSelected: {
+    borderWidth: 3,
+  },
+  folderTab: {
+    position: 'absolute',
+    top: -1,
+    left: Spacing.two,
+    width: '52%',
+    height: 18,
+    borderTopLeftRadius: Radius.small,
+    borderTopRightRadius: Radius.small,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.backgroundElement,
+  },
+  folderPreviewGrid: {
+    flex: 1,
+    marginTop: 16,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignContent: 'flex-start',
+    gap: 4,
+  },
+  folderPreview: {
+    width: '30%',
+    aspectRatio: 0.72,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  folderPreviewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  folderSelectedBadge: {
+    position: 'absolute',
+    top: Spacing.two,
+    right: Spacing.two,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: Colors.light.text,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  meta: {
+    gap: Spacing.one,
+  },
+  folderTitle: {
+    minHeight: 40,
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: '900',
+    color: Colors.light.text,
+  },
+  folderCount: {
+    fontSize: 15,
+    lineHeight: 20,
+    color: Colors.light.textSecondary,
   },
   selectionSheet: {
     position: 'absolute',

@@ -4,6 +4,7 @@ import type { ReadingSettings, SortState } from '@/types/reader';
 
 const SETTINGS_KEY = 'point-reader:settings';
 const SORT_KEY = 'point-reader:sort';
+const readingSettingsListeners = new Set<(settings: ReadingSettings) => void>();
 
 export const defaultReadingSettings: ReadingSettings = {
   mode: 'scroll',
@@ -19,6 +20,7 @@ export const defaultReadingSettings: ReadingSettings = {
   lineHeightScale: 1.45,
   alwaysShowStatusBar: true,
   keepAwake: true,
+  einkOptimization: true,
 };
 
 export const defaultSortState: SortState = {
@@ -33,6 +35,14 @@ export async function loadReadingSettings(): Promise<ReadingSettings> {
 
 export async function saveReadingSettings(settings: ReadingSettings) {
   await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  readingSettingsListeners.forEach((listener) => listener(settings));
+}
+
+export function subscribeReadingSettings(listener: (settings: ReadingSettings) => void) {
+  readingSettingsListeners.add(listener);
+  return () => {
+    readingSettingsListeners.delete(listener);
+  };
 }
 
 export async function loadSortState(): Promise<SortState> {
