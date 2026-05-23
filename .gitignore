@@ -8,6 +8,7 @@ node_modules/
 dist/
 web-build/
 expo-env.d.ts
+eas.json
 
 # Native
 .kotlin/
@@ -41,8 +42,3 @@ app-example
 # generated native folders
 /ios
 /android
-<<<<<<< HEAD
-
-PRD.md
-=======
->>>>>>> a2aff70 (init)

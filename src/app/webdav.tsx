@@ -1,6 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import {
+  ArrowDownAZ,
+  ArrowUpAZ,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -10,6 +12,7 @@ import {
   Pencil,
   Plus,
   Server,
+  SlidersHorizontal,
   Trash2,
   X,
 } from 'lucide-react-native';
@@ -26,6 +29,7 @@ import {
   TextInput,
   type TextStyle,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -37,6 +41,22 @@ import { startWebDavImport, useWebDavImport } from '@/lib/webdavImportQueue';
 import type { WebDavDirectory, WebDavEntry } from '@/types/reader';
 
 const WEBDAV_DIRECTORIES_KEY = 'point-reader:webdav-directories';
+const WEBDAV_SORT_KEY = 'point-reader:webdav-sort';
+
+type WebDavSortState = {
+  field: 'name' | 'modifiedAt';
+  direction: 'asc' | 'desc';
+};
+
+const defaultWebDavSort: WebDavSortState = {
+  field: 'name',
+  direction: 'asc',
+};
+
+const webDavSortLabels: Record<WebDavSortState['field'], string> = {
+  name: '文件名',
+  modifiedAt: '添加时间',
+};
 
 type BrowseState = {
   directory: WebDavDirectory;
@@ -46,6 +66,7 @@ type BrowseState = {
 };
 
 export default function WebDavScreen() {
+  const { width, height } = useWindowDimensions();
   const { colors } = useAppTheme();
   const einkOptimization = useEinkOptimization();
   const [directories, setDirectories] = useState<WebDavDirectory[]>([]);
@@ -53,10 +74,14 @@ export default function WebDavScreen() {
   const [selectedHrefs, setSelectedHrefs] = useState<string[]>([]);
   const [browseState, setBrowseState] = useState<BrowseState | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [sortOpen, setSortOpen] = useState(false);
+  const [sortMenuFrame, setSortMenuFrame] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [editingDirectory, setEditingDirectory] = useState<WebDavDirectory | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sort, setSort] = useState<WebDavSortState>(defaultWebDavSort);
   const [form, setForm] = useState({ name: '', url: '', username: '', password: '' });
   const navigationRequestRef = useRef(0);
+  const sortButtonRef = useRef<View>(null);
   const webDavImport = useWebDavImport();
   const importing = webDavImport.status === 'running';
   const selectedHrefSet = useMemo(() => new Set(selectedHrefs), [selectedHrefs]);
@@ -65,6 +90,7 @@ export default function WebDavScreen() {
     () => entries.filter((entry) => selectedHrefSet.has(entry.href)),
     [entries, selectedHrefSet]
   );
+  const sortedEntries = useMemo(() => sortWebDavEntries(entries, sort), [entries, sort]);
 
   const loadDirectories = useCallback(async () => {
     const raw = await AsyncStorage.getItem(WEBDAV_DIRECTORIES_KEY);
@@ -74,6 +100,19 @@ export default function WebDavScreen() {
   useEffect(() => {
     loadDirectories();
   }, [loadDirectories]);
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadSort() {
+      const raw = await AsyncStorage.getItem(WEBDAV_SORT_KEY);
+      if (!mounted || !raw) return;
+      setSort({ ...defaultWebDavSort, ...JSON.parse(raw) });
+    }
+    void loadSort();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const persistDirectories = async (nextDirectories: WebDavDirectory[]) => {
     setDirectories(nextDirectories);
@@ -235,6 +274,18 @@ export default function WebDavScreen() {
     router.replace('/');
   };
 
+  const applySort = async (nextSort: WebDavSortState) => {
+    setSort(nextSort);
+    await AsyncStorage.setItem(WEBDAV_SORT_KEY, JSON.stringify(nextSort));
+  };
+
+  const openSortMenu = () => {
+    sortButtonRef.current?.measureInWindow((x, y, frameWidth, frameHeight) => {
+      setSortMenuFrame({ x, y, width: frameWidth, height: frameHeight });
+      setSortOpen(true);
+    });
+  };
+
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: colors.background }]}>
       <View style={styles.topBar}>
@@ -304,12 +355,29 @@ export default function WebDavScreen() {
 
       {browseState ? (
         <FlatList
-          data={entries}
+          data={sortedEntries}
           keyExtractor={(item) => item.href}
           contentContainerStyle={styles.content}
           ListHeaderComponent={
             <View style={styles.browserHeader}>
-              <Text style={[styles.sectionTitle, { color: colors.text }]}>目录内容</Text>
+              <View style={styles.browserTitleRow}>
+                <Text style={[styles.sectionTitle, { color: colors.text }]}>目录内容</Text>
+                <View ref={sortButtonRef}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="排序"
+                    disabled={loading}
+                    onPress={openSortMenu}
+                    style={({ pressed }) => [
+                      styles.sortHeaderButton,
+                      { borderColor: colors.border, backgroundColor: colors.surface },
+                      loading && styles.disabledControl,
+                      pressed && styles.pressed,
+                    ]}>
+                    <SlidersHorizontal size={20} color={colors.text} />
+                  </Pressable>
+                </View>
+              </View>
               <Text style={[styles.browserMeta, { color: colors.textSecondary }]}>
                 已选择 {selectedEntries.length} 项{importing ? `，导入中 ${webDavImport.completed}/${webDavImport.total}` : ''}
               </Text>
@@ -322,7 +390,6 @@ export default function WebDavScreen() {
             <WebDavEntryRow
               entry={item}
               colors={colors}
-              einkOptimization={einkOptimization}
               selected={selectedHrefSet.has(item.href)}
               disabled={importing || loading}
               onToggle={() => toggleSelected(item.href)}
@@ -353,6 +420,18 @@ export default function WebDavScreen() {
       )}
 
       {loading ? <DirectoryLoadingOverlay colors={colors} /> : null}
+
+      <SortModal
+        visible={sortOpen}
+        colors={colors}
+        einkOptimization={einkOptimization}
+        sort={sort}
+        frame={sortMenuFrame}
+        screenWidth={width}
+        screenHeight={height}
+        onChange={applySort}
+        onClose={() => setSortOpen(false)}
+      />
 
       <DirectoryModal
         visible={modalOpen}
@@ -446,10 +525,104 @@ function DirectoryLoadingOverlay({ colors }: { colors: AppColors }) {
   );
 }
 
+function SortModal({
+  visible,
+  colors,
+  einkOptimization,
+  sort,
+  frame,
+  screenWidth,
+  screenHeight,
+  onChange,
+  onClose,
+}: {
+  visible: boolean;
+  colors: AppColors;
+  einkOptimization: boolean;
+  sort: WebDavSortState;
+  frame: { x: number; y: number; width: number; height: number } | null;
+  screenWidth: number;
+  screenHeight: number;
+  onChange: (sort: WebDavSortState) => void;
+  onClose: () => void;
+}) {
+  const setField = (field: WebDavSortState['field']) => {
+    if (field === sort.field) return;
+    void onChange({ ...sort, field });
+  };
+  const setDirection = (direction: WebDavSortState['direction']) => {
+    if (direction === sort.direction) return;
+    void onChange({ ...sort, direction });
+  };
+  const menuWidth = 220;
+  const top = frame ? frame.y + frame.height + Spacing.one : Spacing.six;
+  const right = frame ? Math.max(Spacing.three, screenWidth - frame.x - frame.width) : Spacing.three;
+  const maxHeight = Math.max(TouchTarget * 2, screenHeight - top - Spacing.three);
+
+  return (
+    <Modal visible={visible} transparent animationType={modalAnimationType(einkOptimization)} onRequestClose={onClose}>
+      <View style={styles.sortModalLayer}>
+        <Pressable accessibilityRole="button" accessibilityLabel="关闭排序" onPress={onClose} style={StyleSheet.absoluteFillObject} />
+        <View style={[styles.sortCard, { width: menuWidth, top, right, maxHeight, borderColor: colors.text, backgroundColor: colors.surface }]}>
+          <Text style={[styles.sortTitle, { color: colors.text }]}>排序</Text>
+          {(['name', 'modifiedAt'] as const).map((field) => {
+            const selected = field === sort.field;
+            return (
+              <Pressable
+                key={field}
+                accessibilityRole="button"
+                accessibilityLabel={`按${webDavSortLabels[field]}排序`}
+                accessibilityState={{ selected }}
+                onPress={() => setField(field)}
+                style={({ pressed }) => [
+                  styles.sortOption,
+                  selected && { backgroundColor: colors.text },
+                  pressed && styles.pressed,
+                ]}>
+                <View style={styles.sortOptionIcon}>
+                  {selected ? <Check size={18} color={colors.surface} strokeWidth={3} /> : null}
+                </View>
+                <Text style={[styles.sortOptionText, { color: colors.text }, selected && { color: colors.surface }]}>
+                  {webDavSortLabels[field]}
+                </Text>
+              </Pressable>
+            );
+          })}
+          <View style={[styles.sortSeparator, { backgroundColor: colors.border }]} />
+          {([
+            { direction: 'asc', label: '升序', icon: ArrowDownAZ },
+            { direction: 'desc', label: '降序', icon: ArrowUpAZ },
+          ] as const).map((item) => {
+            const selected = item.direction === sort.direction;
+            const Icon = item.icon;
+            return (
+              <Pressable
+                key={item.direction}
+                accessibilityRole="button"
+                accessibilityLabel={item.label}
+                accessibilityState={{ selected }}
+                onPress={() => setDirection(item.direction)}
+                style={({ pressed }) => [
+                  styles.sortOption,
+                  selected && { backgroundColor: colors.text },
+                  pressed && styles.pressed,
+                ]}>
+                <Icon size={18} color={selected ? colors.surface : colors.text} />
+                <Text style={[styles.sortOptionText, { color: colors.text }, selected && { color: colors.surface }]}>
+                  {item.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function WebDavEntryRow({
   entry,
   colors,
-  einkOptimization,
   selected,
   disabled,
   onToggle,
@@ -457,13 +630,12 @@ function WebDavEntryRow({
 }: {
   entry: WebDavEntry;
   colors: AppColors;
-  einkOptimization: boolean;
   selected: boolean;
   disabled: boolean;
   onToggle: () => void;
   onPress: () => void;
 }) {
-  const fileMeta = entry.type === 'file' ? entryMetaText(entry) : null;
+  const meta = entryMetaText(entry);
 
   return (
     <View style={[styles.entry, { borderColor: colors.border, backgroundColor: colors.surface }]}>
@@ -491,8 +663,8 @@ function WebDavEntryRow({
           <FileText size={24} color={colors.textSecondary} />
         )}
         <View style={styles.entryCopy}>
-          <AutoScrollText text={entry.name} textStyle={[styles.entryName, { color: colors.text }]} disabled={einkOptimization} />
-          {fileMeta ? <Text style={[styles.entryMeta, { color: colors.textSecondary }]}>{fileMeta}</Text> : null}
+          <AutoScrollText text={entry.name} textStyle={[styles.entryName, { color: colors.text }]} />
+          {meta ? <Text style={[styles.entryMeta, { color: colors.textSecondary }]}>{meta}</Text> : null}
         </View>
         {entry.type === 'directory' ? <ChevronRight size={20} color={colors.textSecondary} /> : null}
       </Pressable>
@@ -616,11 +788,9 @@ function EmptyState({ loading, text, colors }: { loading: boolean; text: string;
 const AutoScrollText = memo(function AutoScrollText({
   text,
   textStyle,
-  disabled,
 }: {
   text: string;
   textStyle: TextStyle | TextStyle[];
-  disabled: boolean;
 }) {
   const translateX = useRef(new Animated.Value(0)).current;
   const [containerWidth, setContainerWidth] = useState(0);
@@ -632,7 +802,6 @@ const AutoScrollText = memo(function AutoScrollText({
   useEffect(() => {
     translateX.stopAnimation();
     translateX.setValue(0);
-    if (disabled) return;
     if (overflow <= 2) return;
 
     const animation = Animated.loop(
@@ -655,7 +824,7 @@ const AutoScrollText = memo(function AutoScrollText({
     return () => {
       animation.stop();
     };
-  }, [disabled, overflow, translateX]);
+  }, [overflow, translateX]);
 
   return (
     <View
@@ -699,6 +868,25 @@ function normalizeDirectoryUrl(url: string) {
   return url.endsWith('/') ? url : `${url}/`;
 }
 
+function sortWebDavEntries(entries: WebDavEntry[], sort: WebDavSortState) {
+  const direction = sort.direction === 'asc' ? 1 : -1;
+  return [...entries].sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+    if (sort.field === 'modifiedAt') {
+      const left = sortableEntryTime(a.modifiedAt);
+      const right = sortableEntryTime(b.modifiedAt);
+      if (left !== right) return (left - right) * direction;
+    }
+    return a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' }) * direction;
+  });
+}
+
+function sortableEntryTime(modifiedAt?: string) {
+  if (!modifiedAt) return Number.MAX_SAFE_INTEGER;
+  const time = new Date(modifiedAt).getTime();
+  return Number.isNaN(time) ? Number.MAX_SAFE_INTEGER : time;
+}
+
 function estimateEntryNameWidth(text: string) {
   return Array.from(text).reduce((total, char) => {
     if (/[\u3000-\u9fff\uff00-\uffef]/.test(char)) return total + 17;
@@ -711,6 +899,7 @@ function estimateEntryNameWidth(text: string) {
 }
 
 function entryMetaText(entry: WebDavEntry) {
+  if (entry.type === 'directory') return formatEntryDate(entry.modifiedAt);
   return [fileTypeLabel(entry.name), formatFileSize(entry.size), formatEntryDate(entry.modifiedAt)]
     .filter(Boolean)
     .join(' · ');
@@ -734,7 +923,8 @@ function formatEntryDate(modifiedAt?: string) {
   if (!modifiedAt) return '';
   const date = new Date(modifiedAt);
   if (Number.isNaN(date.getTime())) return '';
-  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${date.getHours()}:${minutes}`;
 }
 
 const styles = StyleSheet.create({
@@ -822,6 +1012,59 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
   },
+  sortHeaderButton: {
+    width: TouchTarget,
+    height: TouchTarget,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sortModalLayer: {
+    flex: 1,
+  },
+  sortCard: {
+    position: 'absolute',
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.text,
+    backgroundColor: Colors.light.surface,
+    padding: Spacing.two,
+    gap: Spacing.one,
+  },
+  sortTitle: {
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.one,
+    fontSize: 18,
+    fontWeight: '900',
+    color: Colors.light.text,
+  },
+  sortOption: {
+    minHeight: TouchTarget,
+    borderRadius: Radius.small,
+    paddingHorizontal: Spacing.two,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  sortOptionIcon: {
+    width: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sortOptionText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: Colors.light.text,
+  },
+  sortSeparator: {
+    height: 1,
+    marginVertical: Spacing.one,
+    backgroundColor: Colors.light.border,
+  },
   content: {
     padding: Spacing.three,
     gap: Spacing.three,
@@ -833,6 +1076,13 @@ const styles = StyleSheet.create({
   },
   browserHeader: {
     gap: Spacing.one,
+  },
+  browserTitleRow: {
+    minHeight: TouchTarget,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
   },
   browserMeta: {
     fontSize: 13,

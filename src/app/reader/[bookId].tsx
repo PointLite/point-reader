@@ -34,6 +34,7 @@ import { PdfPane } from '@/components/reader/pdf-pane';
 import { Colors, Spacing, TouchTarget } from '@/constants/theme';
 import { getBook, updateBookProgress } from '@/lib/books';
 import { loadEpubHtmlBook, type EpubHtmlBook } from '@/lib/epubContent';
+import { clearLastReaderBookId, setLastReaderBookId } from '@/lib/lastReader';
 import { animateLayoutIfEnabled } from '@/lib/motion';
 import {
   fontFamilyFor,
@@ -93,7 +94,7 @@ type PdfSeekRequest = {
 };
 
 export default function ReaderScreen() {
-  const { bookId } = useLocalSearchParams<{ bookId: string }>();
+  const { bookId, entry } = useLocalSearchParams<{ bookId: string; entry?: string }>();
   const nativeColorScheme = useColorScheme();
   const systemColorScheme = nativeColorScheme === 'dark' ? 'dark' : 'light';
   const [book, setBook] = useState<Book | null>(null);
@@ -154,6 +155,7 @@ export default function ReaderScreen() {
           setTextScrollRequest(null);
           return;
         }
+        void setLastReaderBookId(nextBook.id);
         setDisplayProgress(nextBook?.progress ?? 0);
         setCurrentChapterIndex(nextBook?.currentChapter ?? 0);
         restoreProgressGuard.current =
@@ -481,8 +483,13 @@ export default function ReaderScreen() {
 
   const closeReader = useCallback(async () => {
     await flushProgressSave();
+    await clearLastReaderBookId(bookRef.current?.id);
+    if (entry === 'restore') {
+      router.replace('/');
+      return;
+    }
     router.back();
-  }, [flushProgressSave]);
+  }, [entry, flushProgressSave]);
   const handlePagedEpubTap = useCallback(
     (x: number, pageWidth: number) => {
       if (settingsRef.current.showPageButtons) {

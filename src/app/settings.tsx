@@ -133,7 +133,7 @@ export default function SettingsScreen() {
             <SettingRow
               colors={colors}
               title="音量键翻页"
-              description="设置项已保存；需要 Dev Client 原生扩展后可接入硬件按键。"
+              description="点击翻页模式下使用音量键前后翻页。"
               value={settings.volumeTurnPage}
               onValueChange={(value) => update({ volumeTurnPage: value })}
             />

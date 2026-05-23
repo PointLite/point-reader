@@ -9,7 +9,8 @@ const EDGE_VOLUME_MAX = 0.92;
 
 export function addVolumeKeyListener(listener: (direction: VolumeKeyDirection) => void) {
   let active = true;
-  let lastVolume = CENTER_VOLUME;
+  let originalVolume = CENTER_VOLUME;
+  let stableVolume = CENTER_VOLUME;
   let suppressNextChange = false;
 
   async function prepareVolumeSession() {
@@ -20,11 +21,11 @@ export function addVolumeKeyListener(listener: (direction: VolumeKeyDirection) =
         await VolumeManager.setActive(true, true);
       }
       const result = await VolumeManager.getVolume();
-      lastVolume = normalizedVolume(result.volume);
-      if (lastVolume <= EDGE_VOLUME_MIN || lastVolume >= EDGE_VOLUME_MAX) {
+      originalVolume = normalizedVolume(result.volume);
+      stableVolume = safeListeningVolume(originalVolume);
+      if (Math.abs(stableVolume - originalVolume) > 0.01) {
         suppressNextChange = true;
-        await VolumeManager.setVolume(CENTER_VOLUME, { showUI: false, playSound: false });
-        lastVolume = CENTER_VOLUME;
+        await VolumeManager.setVolume(stableVolume, { showUI: false, playSound: false });
       }
     } catch {
       // The package throws before the native client is rebuilt; keep the app usable.
@@ -38,23 +39,21 @@ export function addVolumeKeyListener(listener: (direction: VolumeKeyDirection) =
     const nextVolume = normalizedVolume(result.volume);
     if (suppressNextChange) {
       suppressNextChange = false;
-      lastVolume = nextVolume;
       return;
     }
-    if (Math.abs(nextVolume - lastVolume) < 0.01) return;
-    listener(nextVolume > lastVolume ? 'up' : 'down');
-    lastVolume = nextVolume;
-    if (nextVolume <= EDGE_VOLUME_MIN || nextVolume >= EDGE_VOLUME_MAX) {
-      suppressNextChange = true;
-      lastVolume = CENTER_VOLUME;
-      void VolumeManager.setVolume(CENTER_VOLUME, { showUI: false, playSound: false });
-    }
+    if (Math.abs(nextVolume - stableVolume) < 0.01) return;
+    listener(nextVolume > stableVolume ? 'up' : 'down');
+    suppressNextChange = true;
+    void VolumeManager.setVolume(stableVolume, { showUI: false, playSound: false });
   });
 
   return {
     remove: () => {
       active = false;
       subscription.remove();
+      if (Math.abs(originalVolume - stableVolume) > 0.01) {
+        void VolumeManager.setVolume(originalVolume, { showUI: false, playSound: false });
+      }
       void VolumeManager.showNativeVolumeUI({ enabled: true });
     },
   };
@@ -70,4 +69,9 @@ function createVolumeSubscription(callback: (result: { volume: number }) => void
 
 function normalizedVolume(value: number) {
   return Math.max(0, Math.min(1, Number.isFinite(value) ? value : CENTER_VOLUME));
+}
+
+function safeListeningVolume(value: number) {
+  if (value <= EDGE_VOLUME_MIN || value >= EDGE_VOLUME_MAX) return CENTER_VOLUME;
+  return value;
 }

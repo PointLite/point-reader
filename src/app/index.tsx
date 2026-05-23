@@ -36,8 +36,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { BookCard } from '@/components/book-card';
 import { InkButton } from '@/components/ink-button';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
-import { clearBooksGroup, createGroupForBooks, deleteBooks, listGroups, searchBooks, updateGroupName } from '@/lib/books';
+import { clearBooksGroup, createGroupForBooks, deleteBooks, getBook, listGroups, searchBooks, updateGroupName } from '@/lib/books';
 import { importPickedBooks } from '@/lib/importBooks';
+import { clearLastReaderBookId, getLastReaderBookId } from '@/lib/lastReader';
 import { INTERACTION_ANIMATION_MS, animateLayoutIfEnabled, modalAnimationType, useEinkOptimization } from '@/lib/motion';
 import { loadSortState, saveSortState } from '@/lib/settings';
 import { useAppTheme, type AppColors } from '@/lib/theme';
@@ -78,7 +79,11 @@ export default function ShelfScreen() {
   const queryRef = useRef('');
   const sortRef = useRef<SortState>({ field: 'title', direction: 'asc' });
   const handledWebDavImportRef = useRef(0);
+  const hasLoadedShelfRef = useRef(false);
+  const refreshRequestRef = useRef(0);
+  const restoredLastReaderRef = useRef(false);
   const importSheetProgress = useRef(new Animated.Value(0)).current;
+  const importSheetAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
   const webDavImport = useWebDavImport();
 
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
@@ -136,15 +141,25 @@ export default function ShelfScreen() {
     ];
   }, [activeGroupId, books, folders]);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(async (options?: { showLoading?: boolean }) => {
+    const requestId = refreshRequestRef.current + 1;
+    refreshRequestRef.current = requestId;
+    const shouldShowLoading = options?.showLoading ?? !hasLoadedShelfRef.current;
+    if (shouldShowLoading) {
+      setLoading(true);
+    }
     const nextSort = await loadSortState();
+    if (refreshRequestRef.current !== requestId) return;
     sortRef.current = nextSort;
     setSort(nextSort);
     const [nextBooks, nextGroups] = await Promise.all([searchBooks(queryRef.current, nextSort), listGroups()]);
+    if (refreshRequestRef.current !== requestId) return;
     setBooks(nextBooks);
     setGroups(nextGroups);
-    setLoading(false);
+    hasLoadedShelfRef.current = true;
+    if (shouldShowLoading) {
+      setLoading(false);
+    }
   }, []);
 
   useFocusEffect(
@@ -154,6 +169,27 @@ export default function ShelfScreen() {
   );
 
   useEffect(() => {
+    if (restoredLastReaderRef.current) return;
+    restoredLastReaderRef.current = true;
+    let mounted = true;
+    async function restoreLastReader() {
+      const lastBookId = await getLastReaderBookId();
+      if (!mounted || !lastBookId) return;
+      const lastBook = await getBook(lastBookId);
+      if (!mounted) return;
+      if (!lastBook) {
+        await clearLastReaderBookId(lastBookId);
+        return;
+      }
+      router.replace({ pathname: '/reader/[bookId]', params: { bookId: lastBook.id, entry: 'restore' } });
+    }
+    void restoreLastReader();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (webDavImport.status !== 'success') return;
     if (handledWebDavImportRef.current === webDavImport.updatedAt) return;
     handledWebDavImportRef.current = webDavImport.updatedAt;
@@ -161,16 +197,10 @@ export default function ShelfScreen() {
   }, [refresh, webDavImport.status, webDavImport.updatedAt]);
 
   useEffect(() => {
-    if (!showImportOptions) return;
-    importSheetProgress.stopAnimation();
-    importSheetProgress.setValue(einkOptimization ? 1 : 0);
-    if (einkOptimization) return;
-    Animated.timing(importSheetProgress, {
-      toValue: 1,
-      duration: INTERACTION_ANIMATION_MS,
-      useNativeDriver: true,
-    }).start();
-  }, [einkOptimization, importSheetProgress, showImportOptions]);
+    return () => {
+      importSheetAnimationRef.current?.stop();
+    };
+  }, []);
 
   const selectedCount = selectedIds.length;
 
@@ -223,16 +253,21 @@ export default function ShelfScreen() {
         return;
       }
       if (einkOptimization) {
+        importSheetAnimationRef.current?.stop();
+        importSheetProgress.setValue(1);
         setShowImportOptions(false);
         afterClose?.();
         return;
       }
-      importSheetProgress.stopAnimation();
-      Animated.timing(importSheetProgress, {
+      importSheetAnimationRef.current?.stop();
+      const animation = Animated.timing(importSheetProgress, {
         toValue: 0,
         duration: INTERACTION_ANIMATION_MS,
         useNativeDriver: true,
-      }).start(() => {
+      });
+      importSheetAnimationRef.current = animation;
+      animation.start(() => {
+        importSheetAnimationRef.current = null;
         setShowImportOptions(false);
         afterClose?.();
       });
@@ -248,9 +283,22 @@ export default function ShelfScreen() {
   };
 
   const openImportOptions = useCallback(() => {
-    animateLayoutIfEnabled(einkOptimization);
+    importSheetAnimationRef.current?.stop();
+    importSheetProgress.setValue(einkOptimization ? 1 : 0);
     setShowImportOptions(true);
-  }, [einkOptimization]);
+    if (einkOptimization) return;
+    requestAnimationFrame(() => {
+      const animation = Animated.timing(importSheetProgress, {
+        toValue: 1,
+        duration: INTERACTION_ANIMATION_MS,
+        useNativeDriver: true,
+      });
+      importSheetAnimationRef.current = animation;
+      animation.start(() => {
+        importSheetAnimationRef.current = null;
+      });
+    });
+  }, [einkOptimization, importSheetProgress]);
 
   const toggleSelected = useCallback((id: string) => {
     animateLayoutIfEnabled(einkOptimization);
