@@ -8,19 +8,19 @@ const readingSettingsListeners = new Set<(settings: ReadingSettings) => void>();
 
 export const defaultReadingSettings: ReadingSettings = {
   mode: 'scroll',
-  colorScheme: 'light',
-  hideScrollbar: true,
+  colorScheme: 'system',
+  hideScrollbar: false,
   swapTapZones: false,
   volumeTurnPage: false,
-  showPageButtons: true,
+  showPageButtons: false,
   background: 'white',
   fontFamily: 'serif',
   fontSize: 23,
   paddingScale: 0,
   lineHeightScale: 1.45,
-  alwaysShowStatusBar: true,
-  keepAwake: true,
-  einkOptimization: true,
+  alwaysShowStatusBar: false,
+  keepAwake: false,
+  einkOptimization: false,
 };
 
 export const defaultSortState: SortState = {
