@@ -107,6 +107,10 @@ export async function listWebDav(config: WebDavConfig, href?: string): Promise<W
     });
 }
 
+export async function testWebDavConnection(config: WebDavConfig) {
+  await listWebDav(config);
+}
+
 export async function importWebDavEntry(config: WebDavConfig, entry: WebDavEntry): Promise<Book | null> {
   if (entry.type === 'directory' || !detectFormat(entry.name)) return null;
   const target = requestUrl(config, entry.href);

@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PanResponder, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
+import { useTranslation } from '@/lib/i18n';
 import type { AppColors } from '@/lib/theme';
 
 export function ReaderMetricControl({
@@ -32,6 +33,7 @@ export function ReaderMetricControl({
   compact?: boolean;
   onValue: (value: number) => void;
 }) {
+  const { t } = useTranslation();
   const [trackWidth, setTrackWidth] = useState(0);
   const [localValue, setLocalValue] = useState(value);
   const localValueRef = useRef(value);
@@ -161,8 +163,8 @@ export function ReaderMetricControl({
           if (event.nativeEvent.actionName === 'decrement') updateValue(-1);
         }}
         accessibilityActions={[
-          { name: 'increment', label: '增大' },
-          { name: 'decrement', label: '减小' },
+          { name: 'increment', label: t('increase') },
+          { name: 'decrement', label: t('decrease') },
         ]}
         style={[
           styles.metricThumb,

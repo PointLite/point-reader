@@ -6,13 +6,17 @@ import React, { useCallback, useState } from 'react';
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useToast } from '@/components/app-toast';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
 import { deleteBooks, getBook } from '@/lib/books';
 import { extractEpubDetailMetadata, type EpubDetailMetadata } from '@/lib/epubMetadata';
+import { useTranslation } from '@/lib/i18n';
 import { useAppTheme, type AppColors } from '@/lib/theme';
 import type { Book } from '@/types/reader';
 
 export default function BookDetailScreen() {
+  const { t, language } = useTranslation();
+  const showToast = useToast();
   const { colors } = useAppTheme();
   const { bookId } = useLocalSearchParams<{ bookId: string }>();
   const [book, setBook] = useState<Book | null>(null);
@@ -30,69 +34,79 @@ export default function BookDetailScreen() {
     useCallback(() => {
       let mounted = true;
       async function load() {
-        if (!bookId) return;
-        const nextBook = await getBook(bookId);
-        if (!mounted) return;
-        setBook(nextBook);
-        if (!nextBook) {
-          setFileSize(null);
-          setFileCreatedAt(null);
-          setFileUpdatedAt(null);
-          setMetadata(null);
-          return;
-        }
-        const info = await FileSystem.getInfoAsync(nextBook.fileUri);
-        let createdAt: number | null = null;
         try {
-          createdAt = new ExpoFile(nextBook.fileUri).creationTime;
-        } catch {
-          createdAt = null;
-        }
-        if (mounted) {
-          setFileSize(info.exists ? info.size ?? null : null);
-          setFileUpdatedAt(info.exists ? info.modificationTime * 1000 : null);
-          setFileCreatedAt(createdAt);
-        }
-        if (nextBook.format === 'epub') {
-          const nextMetadata = await extractEpubDetailMetadata(nextBook.fileUri);
-          if (mounted) setMetadata(nextMetadata);
-        } else if (mounted) {
-          setMetadata(null);
+          if (!bookId) return;
+          const nextBook = await getBook(bookId);
+          if (!mounted) return;
+          setBook(nextBook);
+          if (!nextBook) {
+            setFileSize(null);
+            setFileCreatedAt(null);
+            setFileUpdatedAt(null);
+            setMetadata(null);
+            return;
+          }
+          const info = await FileSystem.getInfoAsync(nextBook.fileUri);
+          let createdAt: number | null = null;
+          try {
+            createdAt = new ExpoFile(nextBook.fileUri).creationTime;
+          } catch {
+            createdAt = null;
+          }
+          if (mounted) {
+            setFileSize(info.exists ? info.size ?? null : null);
+            setFileUpdatedAt(info.exists ? info.modificationTime * 1000 : null);
+            setFileCreatedAt(createdAt);
+          }
+          if (nextBook.format === 'epub') {
+            const nextMetadata = await extractEpubDetailMetadata(nextBook.fileUri);
+            if (mounted) setMetadata(nextMetadata);
+          } else if (mounted) {
+            setMetadata(null);
+          }
+        } catch (error) {
+          if (mounted) {
+            showToast(error instanceof Error ? error.message : t('operationFailed'));
+          }
         }
       }
       load();
       return () => {
         mounted = false;
       };
-    }, [bookId])
+    }, [bookId, showToast, t])
   );
 
   const removeBook = useCallback(() => {
     if (!book) return;
-    Alert.alert('删除书籍', `确定删除《${book.title}》？`, [
-      { text: '取消', style: 'cancel' },
+    Alert.alert(t('deleteBooks'), t('deleteBookMessage', { title: book.title }), [
+      { text: t('cancel'), style: 'cancel' },
       {
-        text: '删除',
+        text: t('delete'),
         style: 'destructive',
         onPress: async () => {
-          await deleteBooks([book.id]);
-          router.replace('/');
+          try {
+            await deleteBooks([book.id]);
+            router.replace('/');
+          } catch (error) {
+            showToast(error instanceof Error ? error.message : t('operationFailed'));
+          }
         },
       },
     ]);
-  }, [book]);
+  }, [book, showToast, t]);
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: colors.background }]}>
       <View style={styles.topBar}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="返回"
+          accessibilityLabel={t('back')}
           onPress={() => router.back()}
           style={[styles.iconButton, { borderColor: colors.border, backgroundColor: colors.surface }]}>
           <ChevronLeft size={24} color={colors.text} />
         </Pressable>
-        <Text style={[styles.title, { color: colors.text }]}>书籍详情</Text>
+        <Text style={[styles.title, { color: colors.text }]}>{t('bookDetails')}</Text>
       </View>
 
       {book ? (
@@ -110,11 +124,11 @@ export default function BookDetailScreen() {
             </View>
             <View style={styles.summary}>
               <Text style={[styles.bookTitle, { color: colors.text }]}>{metadata?.title || book.title}</Text>
-              <Text style={[styles.author, { color: colors.textSecondary }]}>{metadata?.author || book.author || '未知作者'}</Text>
+              <Text style={[styles.author, { color: colors.textSecondary }]}>{metadata?.author || book.author || t('authorUnknown')}</Text>
               <View style={styles.actionRow}>
-                <ActionIcon accessibilityLabel="编辑书籍占位" icon={<Pencil size={22} color={colors.text} strokeWidth={2.6} />} />
+                <ActionIcon accessibilityLabel={t('editBookPlaceholder')} icon={<Pencil size={22} color={colors.text} strokeWidth={2.6} />} />
                 <ActionIcon
-                  accessibilityLabel="删除书籍"
+                  accessibilityLabel={t('deleteBooks')}
                   onPress={removeBook}
                   icon={<Trash2 size={23} color={colors.danger} strokeWidth={2.4} />}
                 />
@@ -123,7 +137,7 @@ export default function BookDetailScreen() {
           </View>
 
           <SectionHeader
-            title="元数据"
+            title={t('metadata')}
             colors={colors}
             expanded={expandedSections.metadata}
             onPress={() => setExpandedSections((current) => ({ ...current, metadata: !current.metadata }))}
@@ -131,43 +145,43 @@ export default function BookDetailScreen() {
           {expandedSections.metadata ? (
             <>
               <View style={styles.metaGrid}>
-                <MetadataItem colors={colors} label="出版商" value={metadata?.publisher || '未知'} />
-                <MetadataItem colors={colors} label="出版日期" value={formatEpubDate(metadata?.publishedAt)} align="right" />
-                <MetadataItem colors={colors} label="更新日期" value={formatTimestamp(fileUpdatedAt)} />
-                <MetadataItem colors={colors} label="添加日期" value={formatTimestamp(fileCreatedAt)} align="right" />
-                <MetadataItem colors={colors} label="语言" value={metadata?.language || '未知'} />
-                <MetadataItem colors={colors} label="主题" value={metadata?.subject || '未知'} align="right" />
-                <MetadataItem colors={colors} label="格式" value={book.format.toUpperCase()} />
-                <MetadataItem colors={colors} label="文件大小" value={formatFileSize(fileSize)} align="right" />
+                <MetadataItem colors={colors} label={t('publisher')} value={metadata?.publisher || t('unknown')} />
+                <MetadataItem colors={colors} label={t('publishedDate')} value={formatEpubDate(metadata?.publishedAt, t('unknown'), language)} align="right" />
+                <MetadataItem colors={colors} label={t('updatedDate')} value={formatTimestamp(fileUpdatedAt, t('unknown'), language)} />
+                <MetadataItem colors={colors} label={t('addedDate')} value={formatTimestamp(fileCreatedAt, t('unknown'), language)} align="right" />
+                <MetadataItem colors={colors} label={t('bookLanguage')} value={metadata?.language || t('unknown')} />
+                <MetadataItem colors={colors} label={t('subject')} value={metadata?.subject || t('unknown')} align="right" />
+                <MetadataItem colors={colors} label={t('format')} value={book.format.toUpperCase()} />
+                <MetadataItem colors={colors} label={t('fileSize')} value={formatFileSize(fileSize, t('unknown'))} align="right" />
               </View>
-              <MetadataItem colors={colors} label="标识符" value={metadata?.identifier || '未知'} full />
+              <MetadataItem colors={colors} label={t('identifier')} value={metadata?.identifier || t('unknown')} full />
             </>
           ) : null}
 
           <SectionHeader
-            title="系列"
+            title={t('series')}
             colors={colors}
             expanded={expandedSections.series}
             onPress={() => setExpandedSections((current) => ({ ...current, series: !current.series }))}
           />
           {expandedSections.series ? (
             <View style={styles.metaGrid}>
-              <MetadataItem colors={colors} label="系列" value={metadata?.series || '未知'} />
-              <MetadataItem colors={colors} label="系列编号" value={metadata?.seriesIndex || '未知'} align="right" />
+              <MetadataItem colors={colors} label={t('series')} value={metadata?.series || t('unknown')} />
+              <MetadataItem colors={colors} label={t('seriesIndex')} value={metadata?.seriesIndex || t('unknown')} align="right" />
             </View>
           ) : null}
 
           <SectionHeader
-            title="简介"
+            title={t('description')}
             colors={colors}
             expanded={expandedSections.description}
             onPress={() => setExpandedSections((current) => ({ ...current, description: !current.description }))}
           />
-          {expandedSections.description ? <Text style={[styles.description, { color: colors.textSecondary }]}>{metadata?.description || '未知'}</Text> : null}
+          {expandedSections.description ? <Text style={[styles.description, { color: colors.textSecondary }]}>{metadata?.description || t('unknown')}</Text> : null}
         </ScrollView>
       ) : (
         <View style={styles.content}>
-          <Text style={[styles.author, { color: colors.textSecondary }]}>没有找到这本书。</Text>
+          <Text style={[styles.author, { color: colors.textSecondary }]}>{t('bookNotFound')}</Text>
         </View>
       )}
     </SafeAreaView>
@@ -188,9 +202,10 @@ function ActionIcon({ icon, accessibilityLabel, onPress }: { icon: React.ReactNo
 }
 
 function SectionHeader({ title, expanded, colors, onPress }: { title: string; expanded: boolean; colors: AppColors; onPress: () => void }) {
+  const { t } = useTranslation();
   const Icon = expanded ? ChevronUp : ChevronDown;
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={`${expanded ? '收起' : '展开'}${title}`} onPress={onPress} style={styles.sectionHeader}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`${expanded ? t('collapse') : t('expand')}${title}`} onPress={onPress} style={styles.sectionHeader}>
       <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{title}</Text>
       <Icon size={24} color={colors.text} strokeWidth={3} />
     </Pressable>
@@ -220,22 +235,24 @@ function MetadataItem({
   );
 }
 
-function formatEpubDate(value?: string) {
-  if (!value) return '未知';
+function formatEpubDate(value: string | undefined, fallback: string, language: string) {
+  if (!value) return fallback;
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return '未知';
+  if (!Number.isFinite(date.getTime())) return fallback;
+  if (language === 'en') return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
-function formatTimestamp(timestamp: number | null) {
-  if (!timestamp) return '未知';
+function formatTimestamp(timestamp: number | null, fallback: string, language: string) {
+  if (!timestamp) return fallback;
   const date = new Date(timestamp);
-  if (!Number.isFinite(date.getTime())) return '未知';
+  if (!Number.isFinite(date.getTime())) return fallback;
+  if (language === 'en') return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
-function formatFileSize(size: number | null) {
-  if (!size || size <= 0) return '未知';
+function formatFileSize(size: number | null, fallback: string) {
+  if (!size || size <= 0) return fallback;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / 1024 / 1024).toFixed(2)} MB`;
 }

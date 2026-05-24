@@ -3,6 +3,7 @@ import React, { memo } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Radius, Spacing } from '@/constants/theme';
+import { useTranslation } from '@/lib/i18n';
 import type { AppColors } from '@/lib/theme';
 import type { Book } from '@/types/reader';
 
@@ -17,6 +18,7 @@ type BookCardProps = {
 };
 
 function BookCardBase({ book, selected, selectionMode, width, colors = Colors.light, onPress, onLongPress }: BookCardProps) {
+  const { t } = useTranslation();
   const progress = Math.round(book.progress * 100);
   const isRead = progress >= 99;
   const titleStyle = getTitleTextStyle(book.title);
@@ -24,7 +26,7 @@ function BookCardBase({ book, selected, selectionMode, width, colors = Colors.li
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${book.title}，${book.author}，已读 ${progress}%`}
+      accessibilityLabel={t('readProgressA11y', { title: book.title, author: book.author, progress })}
       onPress={onPress}
       onLongPress={onLongPress}
       style={({ pressed }) => [
@@ -62,7 +64,7 @@ function BookCardBase({ book, selected, selectionMode, width, colors = Colors.li
         </Text>
         <View style={styles.detailRow}>
           {isRead ? (
-            <Text style={[styles.readTag, { borderColor: colors.accent, backgroundColor: colors.accentSoft, color: colors.text }]}>已读</Text>
+            <Text style={[styles.readTag, { borderColor: colors.accent, backgroundColor: colors.accentSoft, color: colors.text }]}>{t('read')}</Text>
           ) : (
             <Text style={[styles.progressText, { color: colors.textSecondary }]}>{progress}%</Text>
           )}

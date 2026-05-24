@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Image, Modal, PanResponder, StyleSheet, View, useWindowDimensions } from 'react-native';
 
+import { useTranslation } from '@/lib/i18n';
 import { modalAnimationType } from '@/lib/motion';
 
 const MIN_PREVIEW_SCALE = 1;
@@ -15,6 +16,7 @@ export function ImagePreviewModal({
   einkOptimization: boolean;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const { width, height } = useWindowDimensions();
   const [imageRatio, setImageRatio] = useState(1);
   const scale = useRef(new Animated.Value(1)).current;
@@ -146,7 +148,7 @@ export function ImagePreviewModal({
       <View
         accessible
         accessibilityRole="imagebutton"
-        accessibilityLabel="图片预览，点击关闭"
+        accessibilityLabel={t('imagePreviewClose')}
         style={styles.backdrop}
         {...panResponder.panHandlers}>
         {uri ? (

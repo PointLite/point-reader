@@ -33,10 +33,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ToastViewport, useToast } from '@/components/app-toast';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
+import { useTranslation } from '@/lib/i18n';
 import { modalAnimationType, useEinkOptimization } from '@/lib/motion';
 import { useAppTheme, type AppColors } from '@/lib/theme';
-import { listWebDav, type WebDavConfig } from '@/lib/webdav';
+import { listWebDav, testWebDavConnection, type WebDavConfig } from '@/lib/webdav';
 import { startWebDavImport, useWebDavImport } from '@/lib/webdavImportQueue';
 import type { WebDavDirectory, WebDavEntry } from '@/types/reader';
 
@@ -53,10 +55,10 @@ const defaultWebDavSort: WebDavSortState = {
   direction: 'asc',
 };
 
-const webDavSortLabels: Record<WebDavSortState['field'], string> = {
-  name: '文件名',
-  modifiedAt: '添加时间',
-};
+const webDavSortLabels = {
+  name: 'fileName',
+  modifiedAt: 'addTime',
+} as const;
 
 type BrowseState = {
   directory: WebDavDirectory;
@@ -67,6 +69,8 @@ type BrowseState = {
 
 export default function WebDavScreen() {
   const { width, height } = useWindowDimensions();
+  const { t } = useTranslation();
+  const showToast = useToast();
   const { colors } = useAppTheme();
   const einkOptimization = useEinkOptimization();
   const [directories, setDirectories] = useState<WebDavDirectory[]>([]);
@@ -80,6 +84,7 @@ export default function WebDavScreen() {
   const [loading, setLoading] = useState(false);
   const [sort, setSort] = useState<WebDavSortState>(defaultWebDavSort);
   const [form, setForm] = useState({ name: '', url: '', username: '', password: '' });
+  const [urlInputInvalid, setUrlInputInvalid] = useState(false);
   const navigationRequestRef = useRef(0);
   const sortButtonRef = useRef<View>(null);
   const webDavImport = useWebDavImport();
@@ -93,9 +98,13 @@ export default function WebDavScreen() {
   const sortedEntries = useMemo(() => sortWebDavEntries(entries, sort), [entries, sort]);
 
   const loadDirectories = useCallback(async () => {
-    const raw = await AsyncStorage.getItem(WEBDAV_DIRECTORIES_KEY);
-    setDirectories(raw ? JSON.parse(raw) : []);
-  }, []);
+    try {
+      const raw = await AsyncStorage.getItem(WEBDAV_DIRECTORIES_KEY);
+      setDirectories(raw ? JSON.parse(raw) : []);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('operationFailed'));
+    }
+  }, [showToast, t]);
 
   useEffect(() => {
     loadDirectories();
@@ -104,15 +113,21 @@ export default function WebDavScreen() {
   useEffect(() => {
     let mounted = true;
     async function loadSort() {
-      const raw = await AsyncStorage.getItem(WEBDAV_SORT_KEY);
-      if (!mounted || !raw) return;
-      setSort({ ...defaultWebDavSort, ...JSON.parse(raw) });
+      try {
+        const raw = await AsyncStorage.getItem(WEBDAV_SORT_KEY);
+        if (!mounted || !raw) return;
+        setSort({ ...defaultWebDavSort, ...JSON.parse(raw) });
+      } catch (error) {
+        if (mounted) {
+          showToast(error instanceof Error ? error.message : t('operationFailed'));
+        }
+      }
     }
     void loadSort();
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [showToast, t]);
 
   const persistDirectories = async (nextDirectories: WebDavDirectory[]) => {
     setDirectories(nextDirectories);
@@ -136,7 +151,7 @@ export default function WebDavScreen() {
       return true;
     } catch (error) {
       if (requestId === navigationRequestRef.current) {
-        Alert.alert('WebDAV', error instanceof Error ? error.message : '无法浏览目录');
+        showToast(error instanceof Error ? error.message : t('webdavBrowseFailed'));
       }
       return false;
     } finally {
@@ -203,6 +218,7 @@ export default function WebDavScreen() {
   const openAddDirectory = () => {
     setEditingDirectory(null);
     setForm({ name: '', url: '', username: '', password: '' });
+    setUrlInputInvalid(false);
     setModalOpen(true);
   };
 
@@ -214,6 +230,7 @@ export default function WebDavScreen() {
       username: directory.username ?? '',
       password: directory.password ?? '',
     });
+    setUrlInputInvalid(false);
     setModalOpen(true);
   };
 
@@ -221,19 +238,21 @@ export default function WebDavScreen() {
     setModalOpen(false);
     setEditingDirectory(null);
     setForm({ name: '', url: '', username: '', password: '' });
+    setUrlInputInvalid(false);
   };
 
   const saveDirectory = async () => {
     const url = form.url.trim();
     if (!url) {
-      Alert.alert(editingDirectory ? '编辑目录' : '添加目录', '请输入 WebDAV 目录地址。');
+      setUrlInputInvalid(true);
       return;
     }
+    setUrlInputInvalid(false);
 
     const now = Date.now();
     const nextDirectory: WebDavDirectory = {
       id: editingDirectory?.id ?? `${now}-${Math.random().toString(36).slice(2)}`,
-      name: form.name.trim() || directoryNameFromUrl(url),
+      name: form.name.trim() || t('directoryNamePlaceholder'),
       url: normalizeDirectoryUrl(url),
       username: form.username.trim() || undefined,
       password: form.password || undefined,
@@ -244,18 +263,26 @@ export default function WebDavScreen() {
     const nextDirectories = editingDirectory
       ? directories.map((directory) => (directory.id === editingDirectory.id ? nextDirectory : directory))
       : [nextDirectory, ...directories];
-    await persistDirectories(nextDirectories);
-    closeDirectoryModal();
+    try {
+      await persistDirectories(nextDirectories);
+      closeDirectoryModal();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('operationFailed'));
+    }
   };
 
   const deleteDirectory = (directory: WebDavDirectory) => {
-    Alert.alert('删除目录', `确定删除“${directory.name}”？这不会删除已经导入书架的书籍。`, [
-      { text: '取消', style: 'cancel' },
+    Alert.alert(t('deleteDirectory'), t('deleteDirectoryMessage', { name: directory.name }), [
+      { text: t('cancel'), style: 'cancel' },
       {
-        text: '删除',
+        text: t('delete'),
         style: 'destructive',
         onPress: async () => {
-          await persistDirectories(directories.filter((item) => item.id !== directory.id));
+          try {
+            await persistDirectories(directories.filter((item) => item.id !== directory.id));
+          } catch (error) {
+            showToast(error instanceof Error ? error.message : t('operationFailed'));
+          }
         },
       },
     ]);
@@ -266,7 +293,9 @@ export default function WebDavScreen() {
     const entriesToImport = selectedEntries;
     const config = configFor(browseState.directory);
     setSelectedHrefs([]);
-    void startWebDavImport(config, entriesToImport).catch(() => {});
+    void startWebDavImport(config, entriesToImport).catch((error) => {
+      showToast(error instanceof Error ? error.message : t('importFailedShort'));
+    });
   };
 
   const closeToHome = () => {
@@ -275,8 +304,12 @@ export default function WebDavScreen() {
   };
 
   const applySort = async (nextSort: WebDavSortState) => {
-    setSort(nextSort);
-    await AsyncStorage.setItem(WEBDAV_SORT_KEY, JSON.stringify(nextSort));
+    try {
+      setSort(nextSort);
+      await AsyncStorage.setItem(WEBDAV_SORT_KEY, JSON.stringify(nextSort));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('operationFailed'));
+    }
   };
 
   const openSortMenu = () => {
@@ -291,7 +324,7 @@ export default function WebDavScreen() {
       <View style={styles.topBar}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="返回"
+          accessibilityLabel={t('back')}
           accessibilityState={{ disabled: loading }}
           disabled={loading}
           onPress={goBack}
@@ -310,7 +343,7 @@ export default function WebDavScreen() {
           <View style={styles.browseActions}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="关闭 WebDAV 浏览"
+              accessibilityLabel={t('closeWebdavBrowse')}
               disabled={loading}
               onPress={closeToHome}
               style={({ pressed }) => [
@@ -323,7 +356,7 @@ export default function WebDavScreen() {
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="导入所选内容"
+              accessibilityLabel={t('importSelected')}
               disabled={selectedEntries.length === 0 || importing || loading}
               onPress={importSelection}
               style={({ pressed }) => [
@@ -333,13 +366,13 @@ export default function WebDavScreen() {
                 pressed && styles.pressed,
               ]}>
               {importing ? <ActivityIndicator color={colors.surface} /> : <Download size={20} color={colors.surface} />}
-              <Text style={[styles.actionButtonText, { color: colors.surface }]}>导入</Text>
+              <Text style={[styles.actionButtonText, { color: colors.surface }]}>{t('import')}</Text>
             </Pressable>
           </View>
         ) : (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="添加目录"
+              accessibilityLabel={t('addDirectory')}
               disabled={loading || importing}
               onPress={openAddDirectory}
               style={({ pressed }) => [
@@ -361,11 +394,11 @@ export default function WebDavScreen() {
           ListHeaderComponent={
             <View style={styles.browserHeader}>
               <View style={styles.browserTitleRow}>
-                <Text style={[styles.sectionTitle, { color: colors.text }]}>目录内容</Text>
+                <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('directoryContents')}</Text>
                 <View ref={sortButtonRef}>
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel="排序"
+                    accessibilityLabel={t('sort')}
                     disabled={loading}
                     onPress={openSortMenu}
                     style={({ pressed }) => [
@@ -379,12 +412,13 @@ export default function WebDavScreen() {
                 </View>
               </View>
               <Text style={[styles.browserMeta, { color: colors.textSecondary }]}>
-                已选择 {selectedEntries.length} 项{importing ? `，导入中 ${webDavImport.completed}/${webDavImport.total}` : ''}
+                {t('selectedItems', { count: selectedEntries.length })}
+                {importing ? t('importingProgress', { completed: webDavImport.completed, total: webDavImport.total }) : ''}
               </Text>
             </View>
           }
           ListEmptyComponent={
-            <EmptyState colors={colors} loading={loading} text={loading ? '正在读取目录...' : '这个目录里暂时没有内容。'} />
+            <EmptyState colors={colors} loading={loading} text={loading ? t('readingDirectory') : t('emptyDirectory')} />
           }
           renderItem={({ item }) => (
             <WebDavEntryRow
@@ -402,9 +436,9 @@ export default function WebDavScreen() {
           data={directories}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.content}
-          ListHeaderComponent={<Text style={[styles.sectionTitle, { color: colors.text }]}>我的目录</Text>}
+          ListHeaderComponent={<Text style={[styles.sectionTitle, { color: colors.text }]}>{t('myDirectories')}</Text>}
           ListEmptyComponent={
-            <EmptyState colors={colors} loading={false} text="右上角添加 WebDAV 目录后，可以在这里进入浏览并批量导入书籍。" />
+            <EmptyState colors={colors} loading={false} text={t('emptyDirectories')} />
           }
           renderItem={({ item }) => (
             <DirectoryCard
@@ -439,7 +473,11 @@ export default function WebDavScreen() {
         einkOptimization={einkOptimization}
         editing={Boolean(editingDirectory)}
         form={form}
-        onChange={setForm}
+        urlInvalid={urlInputInvalid}
+        onChange={(nextForm) => {
+          setForm(nextForm);
+          if (nextForm.url.trim()) setUrlInputInvalid(false);
+        }}
         onClose={closeDirectoryModal}
         onSave={saveDirectory}
       />
@@ -462,11 +500,12 @@ function DirectoryCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <View style={[styles.directoryCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`浏览 ${directory.name}`}
+        accessibilityLabel={t('browseDirectory', { name: directory.name })}
         accessibilityState={{ disabled }}
         disabled={disabled}
         onPress={onPress}
@@ -481,13 +520,15 @@ function DirectoryCard({
           <Text style={[styles.directoryUrl, { color: colors.textSecondary }]} numberOfLines={2}>
             {directory.url}
           </Text>
-          <Text style={[styles.directoryMeta, { color: colors.accent }]}>{directory.username ? `账号 ${directory.username}` : '无账号'}</Text>
+          <Text style={[styles.directoryMeta, { color: colors.accent }]}>
+            {directory.username ? t('account', { username: directory.username }) : t('noAccount')}
+          </Text>
         </View>
       </Pressable>
       <View style={[styles.directoryActions, { borderLeftColor: colors.border }]}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`编辑 ${directory.name}`}
+          accessibilityLabel={t('editDirectoryName', { name: directory.name })}
           accessibilityState={{ disabled }}
           disabled={disabled}
           onPress={onEdit}
@@ -496,7 +537,7 @@ function DirectoryCard({
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`删除 ${directory.name}`}
+          accessibilityLabel={t('deleteDirectoryName', { name: directory.name })}
           accessibilityState={{ disabled }}
           disabled={disabled}
           onPress={onDelete}
@@ -515,11 +556,12 @@ function DirectoryCard({
 }
 
 function DirectoryLoadingOverlay({ colors }: { colors: AppColors }) {
+  const { t } = useTranslation();
   return (
     <View style={styles.loadingOverlay} pointerEvents="auto">
       <View style={[styles.loadingCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
         <ActivityIndicator color={colors.text} />
-        <Text style={[styles.loadingText, { color: colors.textSecondary }]}>正在读取目录...</Text>
+        <Text style={[styles.loadingText, { color: colors.textSecondary }]}>{t('readingDirectory')}</Text>
       </View>
     </View>
   );
@@ -546,6 +588,7 @@ function SortModal({
   onChange: (sort: WebDavSortState) => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const setField = (field: WebDavSortState['field']) => {
     if (field === sort.field) return;
     void onChange({ ...sort, field });
@@ -562,16 +605,16 @@ function SortModal({
   return (
     <Modal visible={visible} transparent animationType={modalAnimationType(einkOptimization)} onRequestClose={onClose}>
       <View style={styles.sortModalLayer}>
-        <Pressable accessibilityRole="button" accessibilityLabel="关闭排序" onPress={onClose} style={StyleSheet.absoluteFillObject} />
+        <Pressable accessibilityRole="button" accessibilityLabel={t('closeSort')} onPress={onClose} style={StyleSheet.absoluteFillObject} />
         <View style={[styles.sortCard, { width: menuWidth, top, right, maxHeight, borderColor: colors.text, backgroundColor: colors.surface }]}>
-          <Text style={[styles.sortTitle, { color: colors.text }]}>排序</Text>
+          <Text style={[styles.sortTitle, { color: colors.text }]}>{t('sort')}</Text>
           {(['name', 'modifiedAt'] as const).map((field) => {
             const selected = field === sort.field;
             return (
               <Pressable
                 key={field}
                 accessibilityRole="button"
-                accessibilityLabel={`按${webDavSortLabels[field]}排序`}
+                accessibilityLabel={t('sortBy', { label: t(webDavSortLabels[field]) })}
                 accessibilityState={{ selected }}
                 onPress={() => setField(field)}
                 style={({ pressed }) => [
@@ -583,15 +626,15 @@ function SortModal({
                   {selected ? <Check size={18} color={colors.surface} strokeWidth={3} /> : null}
                 </View>
                 <Text style={[styles.sortOptionText, { color: colors.text }, selected && { color: colors.surface }]}>
-                  {webDavSortLabels[field]}
+                  {t(webDavSortLabels[field])}
                 </Text>
               </Pressable>
             );
           })}
           <View style={[styles.sortSeparator, { backgroundColor: colors.border }]} />
           {([
-            { direction: 'asc', label: '升序', icon: ArrowDownAZ },
-            { direction: 'desc', label: '降序', icon: ArrowUpAZ },
+            { direction: 'asc', label: t('ascending'), icon: ArrowDownAZ },
+            { direction: 'desc', label: t('descending'), icon: ArrowUpAZ },
           ] as const).map((item) => {
             const selected = item.direction === sort.direction;
             const Icon = item.icon;
@@ -635,14 +678,15 @@ function WebDavEntryRow({
   onToggle: () => void;
   onPress: () => void;
 }) {
-  const meta = entryMetaText(entry);
+  const { t, language } = useTranslation();
+  const meta = entryMetaText(entry, t, language);
 
   return (
     <View style={[styles.entry, { borderColor: colors.border, backgroundColor: colors.surface }]}>
       <Pressable
         accessibilityRole="checkbox"
         accessibilityState={{ checked: selected, disabled }}
-        accessibilityLabel={`选择 ${entry.name}`}
+        accessibilityLabel={t('selectEntry', { name: entry.name })}
         disabled={disabled}
         onPress={onToggle}
         hitSlop={Spacing.one}
@@ -653,7 +697,7 @@ function WebDavEntryRow({
       </Pressable>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={entry.type === 'directory' ? `进入 ${entry.name}` : entry.name}
+        accessibilityLabel={entry.type === 'directory' ? t('enterDirectory', { name: entry.name }) : entry.name}
         disabled={disabled}
         onPress={onPress}
         style={({ pressed }) => [styles.entryMain, pressed && styles.pressed]}>
@@ -678,6 +722,7 @@ function DirectoryModal({
   colors,
   einkOptimization,
   form,
+  urlInvalid,
   onChange,
   onClose,
   onSave,
@@ -687,57 +732,103 @@ function DirectoryModal({
   colors: AppColors;
   einkOptimization: boolean;
   form: { name: string; url: string; username: string; password: string };
+  urlInvalid: boolean;
   onChange: (form: { name: string; url: string; username: string; password: string }) => void;
   onClose: () => void;
   onSave: () => void;
 }) {
+  const { t } = useTranslation();
+  const showToast = useToast();
+  const [testing, setTesting] = useState(false);
+  const testConnection = async () => {
+    const url = form.url.trim();
+    if (!url) {
+      showToast(t('webdavConnectionFailedToast'));
+      return;
+    }
+    setTesting(true);
+    try {
+      await testWebDavConnection({
+        url: normalizeDirectoryUrl(url),
+        username: form.username.trim() || undefined,
+        password: form.password || undefined,
+      });
+      showToast(t('webdavConnectionSuccessToast'));
+    } catch {
+      showToast(t('webdavConnectionFailedToast'));
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <Modal visible={visible} transparent animationType={modalAnimationType(einkOptimization)} onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
         <View style={[styles.modalCard, { borderColor: colors.text, backgroundColor: colors.surface }]}>
           <View style={styles.modalHeader}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>{editing ? '编辑目录' : '添加目录'}</Text>
-            <Pressable accessibilityRole="button" accessibilityLabel="关闭" onPress={onClose} style={styles.modalClose}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>{editing ? t('editDirectory') : t('addDirectory')}</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel={t('close')} onPress={onClose} style={styles.modalClose}>
               <X size={22} color={colors.text} />
             </Pressable>
           </View>
           <LabeledInput
             colors={colors}
-            label="目录名称"
+            label={t('directoryName')}
             value={form.name}
             onChangeText={(name) => onChange({ ...form, name })}
-            placeholder="我的 WebDAV"
+            placeholder={t('directoryNamePlaceholder')}
           />
           <LabeledInput
             colors={colors}
-            label="目录地址"
+            label={t('directoryAddress')}
             value={form.url}
             onChangeText={(url) => onChange({ ...form, url })}
             placeholder="https://example.com/dav/books/"
+            invalid={urlInvalid}
           />
           <LabeledInput
             colors={colors}
-            label="用户名"
+            label={t('username')}
             value={form.username}
             onChangeText={(username) => onChange({ ...form, username })}
-            placeholder="可选"
+            placeholder={t('optional')}
           />
           <LabeledInput
             colors={colors}
-            label="密码"
+            label={t('password')}
             value={form.password}
             onChangeText={(password) => onChange({ ...form, password })}
-            placeholder="可选"
+            placeholder={t('optional')}
             secureTextEntry
           />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={editing ? '保存修改' : '保存目录'}
-            onPress={onSave}
-            style={({ pressed }) => [styles.saveButton, { backgroundColor: colors.text }, pressed && styles.pressed]}>
-            <Text style={[styles.saveButtonText, { color: colors.surface }]}>{editing ? '保存修改' : '保存目录'}</Text>
-          </Pressable>
+          <View style={styles.modalActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="测试 WebDAV 连接"
+              disabled={testing}
+              onPress={testConnection}
+              style={({ pressed }) => [
+                styles.testButton,
+                { borderColor: colors.border, backgroundColor: colors.surface },
+                testing && styles.disabledControl,
+                pressed && styles.pressed,
+              ]}>
+              {testing ? (
+                <ActivityIndicator color={colors.text} />
+              ) : (
+                <Text style={[styles.testButtonText, { color: colors.text }]}>{t('testConnection')}</Text>
+              )}
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={editing ? t('saveChanges') : t('saveDirectory')}
+              onPress={onSave}
+              style={({ pressed }) => [styles.saveButton, { backgroundColor: colors.text }, pressed && styles.pressed]}>
+              <Text style={[styles.saveButtonText, { color: colors.surface }]}>{editing ? t('saveChanges') : t('saveDirectory')}</Text>
+            </Pressable>
+          </View>
         </View>
+        <ToastViewport colors={colors} />
       </View>
     </Modal>
   );
@@ -750,6 +841,7 @@ function LabeledInput({
   onChangeText,
   placeholder,
   secureTextEntry,
+  invalid,
 }: {
   label: string;
   colors: AppColors;
@@ -757,6 +849,7 @@ function LabeledInput({
   onChangeText: (value: string) => void;
   placeholder: string;
   secureTextEntry?: boolean;
+  invalid?: boolean;
 }) {
   return (
     <View style={styles.inputGroup}>
@@ -770,7 +863,7 @@ function LabeledInput({
         secureTextEntry={secureTextEntry}
         autoCapitalize="none"
         autoCorrect={false}
-        style={[styles.input, { borderColor: colors.border, color: colors.text }]}
+        style={[styles.input, { borderColor: invalid ? colors.danger : colors.border, color: colors.text }]}
       />
     </View>
   );
@@ -854,16 +947,6 @@ const AutoScrollText = memo(function AutoScrollText({
   );
 });
 
-function directoryNameFromUrl(url: string) {
-  try {
-    const parsed = new URL(url);
-    const pathName = decodeURIComponent(parsed.pathname.replace(/\/$/, '').split('/').filter(Boolean).pop() ?? '');
-    return pathName || parsed.hostname || 'WebDAV 目录';
-  } catch {
-    return 'WebDAV 目录';
-  }
-}
-
 function normalizeDirectoryUrl(url: string) {
   return url.endsWith('/') ? url : `${url}/`;
 }
@@ -898,18 +981,18 @@ function estimateEntryNameWidth(text: string) {
   }, 0);
 }
 
-function entryMetaText(entry: WebDavEntry) {
-  if (entry.type === 'directory') return formatEntryDate(entry.modifiedAt);
-  return [fileTypeLabel(entry.name), formatFileSize(entry.size), formatEntryDate(entry.modifiedAt)]
+function entryMetaText(entry: WebDavEntry, t: ReturnType<typeof useTranslation>['t'], language: string) {
+  if (entry.type === 'directory') return formatEntryDate(entry.modifiedAt, language);
+  return [fileTypeLabel(entry.name, t), formatFileSize(entry.size), formatEntryDate(entry.modifiedAt, language)]
     .filter(Boolean)
     .join(' · ');
 }
 
-function fileTypeLabel(name: string) {
+function fileTypeLabel(name: string, t: ReturnType<typeof useTranslation>['t']) {
   const ext = name.split('.').pop()?.trim().toUpperCase();
-  if (!ext || ext === name.toUpperCase()) return '文件';
+  if (!ext || ext === name.toUpperCase()) return t('file');
   if (ext === 'EPUB' || ext === 'TXT' || ext === 'PDF') return ext;
-  return `${ext} 文件`;
+  return t('typedFile', { type: ext });
 }
 
 function formatFileSize(size?: number) {
@@ -919,10 +1002,13 @@ function formatFileSize(size?: number) {
   return `${(size / 1024 / 1024).toFixed(size < 10 * 1024 * 1024 ? 2 : 1)} MB`;
 }
 
-function formatEntryDate(modifiedAt?: string) {
+function formatEntryDate(modifiedAt?: string, language = 'zh') {
   if (!modifiedAt) return '';
   const date = new Date(modifiedAt);
   if (Number.isNaN(date.getTime())) return '';
+  if (language === 'en') {
+    return date.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
   const minutes = date.getMinutes().toString().padStart(2, '0');
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${date.getHours()}:${minutes}`;
 }
@@ -1265,6 +1351,7 @@ const styles = StyleSheet.create({
   modalClose: {
     width: TouchTarget,
     height: TouchTarget,
+    marginRight: -13,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1285,7 +1372,29 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.light.text,
   },
+  modalActions: {
+    minHeight: TouchTarget,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: Spacing.two,
+  },
+  testButton: {
+    minWidth: 72,
+    minHeight: TouchTarget,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  testButtonText: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: Colors.light.text,
+  },
   saveButton: {
+    flex: 1,
     minHeight: TouchTarget,
     borderRadius: Radius.medium,
     backgroundColor: Colors.light.text,

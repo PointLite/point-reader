@@ -7,6 +7,7 @@ const SORT_KEY = 'point-reader:sort';
 const readingSettingsListeners = new Set<(settings: ReadingSettings) => void>();
 
 export const defaultReadingSettings: ReadingSettings = {
+  appLanguage: defaultAppLanguage(),
   mode: 'scroll',
   colorScheme: 'system',
   hideScrollbar: false,
@@ -30,7 +31,9 @@ export const defaultSortState: SortState = {
 
 export async function loadReadingSettings(): Promise<ReadingSettings> {
   const raw = await AsyncStorage.getItem(SETTINGS_KEY);
-  return raw ? { ...defaultReadingSettings, ...JSON.parse(raw) } : defaultReadingSettings;
+  if (!raw) return defaultReadingSettings;
+  const parsed = JSON.parse(raw);
+  return { ...defaultReadingSettings, ...parsed, appLanguage: normalizeAppLanguage(parsed.appLanguage) };
 }
 
 export async function saveReadingSettings(settings: ReadingSettings) {
@@ -52,4 +55,14 @@ export async function loadSortState(): Promise<SortState> {
 
 export async function saveSortState(sort: SortState) {
   await AsyncStorage.setItem(SORT_KEY, JSON.stringify(sort));
+}
+
+function defaultAppLanguage(): ReadingSettings['appLanguage'] {
+  const locale = Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase();
+  return locale.startsWith('zh') ? 'zh' : 'en';
+}
+
+function normalizeAppLanguage(value: unknown): ReadingSettings['appLanguage'] {
+  if (value === 'zh' || value === 'en') return value;
+  return defaultAppLanguage();
 }

@@ -26,6 +26,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useToast } from '@/components/app-toast';
 import { EpubPagedPane, type EpubPagedSeekRequest } from '@/components/reader/epub-paged-pane';
 import { EpubScrollPane, type EpubSeekRequest } from '@/components/reader/epub-scroll-pane';
 import { ImagePreviewModal } from '@/components/reader/image-preview-modal';
@@ -35,6 +36,7 @@ import { Colors, Spacing, TouchTarget } from '@/constants/theme';
 import { getBook, updateBookProgress } from '@/lib/books';
 import { loadEpubHtmlBook, type EpubHtmlBook } from '@/lib/epubContent';
 import { clearLastReaderBookId, setLastReaderBookId } from '@/lib/lastReader';
+import { useTranslation } from '@/lib/i18n';
 import { animateLayoutIfEnabled } from '@/lib/motion';
 import {
   fontFamilyFor,
@@ -94,6 +96,8 @@ type PdfSeekRequest = {
 };
 
 export default function ReaderScreen() {
+  const { t } = useTranslation();
+  const showToast = useToast();
   const { bookId, entry } = useLocalSearchParams<{ bookId: string; entry?: string }>();
   const nativeColorScheme = useColorScheme();
   const systemColorScheme = nativeColorScheme === 'dark' ? 'dark' : 'light';
@@ -144,77 +148,83 @@ export default function ReaderScreen() {
     useCallback(() => {
       let mounted = true;
       async function load() {
-        if (!bookId) return;
-        const [nextBook, nextSettings] = await Promise.all([getBook(bookId), loadReadingSettings()]);
-        if (!mounted) return;
-        setSettings(nextSettings);
-        if (!nextBook) {
-          setBook(null);
-          setChapters([]);
-          setTextWindowStart(0);
-          setTextScrollRequest(null);
-          return;
-        }
-        void setLastReaderBookId(nextBook.id);
-        setDisplayProgress(nextBook?.progress ?? 0);
-        setCurrentChapterIndex(nextBook?.currentChapter ?? 0);
-        restoreProgressGuard.current =
-          nextBook && nextBook.progress > 0.005
-            ? { bookId: nextBook.id, progress: nextBook.progress, until: Date.now() + 6000 }
-            : null;
-        setCurrentEpubHref(undefined);
-        setEpubReaderKey((key) => key + 1);
-        setEpubChapterTitle('');
-        setEpubHtmlBook(null);
-        setEpubSeekRequest(null);
-        setEpubPagedSeekRequest(null);
-        setEpubPagedTurnRequest(null);
-        setPdfTurnRequest(null);
-        setTextTurnRequest(null);
-        if (nextBook?.format === 'txt') {
-          const nextChapters = await loadTextChapters(nextBook);
+        try {
+          if (!bookId) return;
+          const [nextBook, nextSettings] = await Promise.all([getBook(bookId), loadReadingSettings()]);
           if (!mounted) return;
-          const nextTextBlocks = buildTextBlocks(nextChapters);
-          const restoredOffset = Math.round(clamp(Math.floor(nextBook.currentOffset), 0, Math.max(0, nextTextBlocks.length - 1)));
-          const windowStart = Math.max(0, restoredOffset - 2);
-          const restoredBook = { ...nextBook, currentOffset: restoredOffset };
-          const restoredChapter = nextTextBlocks[restoredOffset]?.chapterIndex ?? nextBook.currentChapter;
-          setBook(restoredBook);
-          setCurrentChapterIndex(restoredChapter);
-          setChapters(nextChapters);
-          setTextWindowStart(windowStart);
-          setTextScrollRequest(null);
-          setRenderedBlockCount(Math.min(nextTextBlocks.length, Math.max(windowStart + INITIAL_TEXT_BLOCKS, restoredOffset + TEXT_BLOCK_INCREMENT)));
-        } else if (nextBook.format === 'epub') {
-          const nextEpub = await loadEpubHtmlBook(nextBook.fileUri);
-          if (!mounted) return;
-          setChapters([]);
-          setTextWindowStart(0);
-          setTextScrollRequest(null);
-          setEpubToc(
-            nextEpub.chapters
-              .map((chapter) => ({ id: chapter.id, href: chapter.href, title: chapter.title.trim(), text: '' }))
-              .filter((chapter) => chapter.title.length > 0)
-          );
-          const { index: restoredIndex, offset: restoredOffset } = resolveEpubRestorePosition(nextBook, nextEpub);
-          const restoredBook = { ...nextBook, currentChapter: restoredIndex, currentOffset: restoredOffset };
-          setBook(restoredBook);
-          setCurrentChapterIndex(restoredIndex);
-          setCurrentEpubHref(nextEpub.chapters[restoredIndex]?.href);
-          setEpubChapterTitle(nextEpub.chapters[restoredIndex]?.title ?? '');
-          setEpubHtmlBook(nextEpub);
-        } else {
-          setBook(nextBook);
-          setChapters([]);
-          setTextWindowStart(0);
-          setTextScrollRequest(null);
+          setSettings(nextSettings);
+          if (!nextBook) {
+            setBook(null);
+            setChapters([]);
+            setTextWindowStart(0);
+            setTextScrollRequest(null);
+            return;
+          }
+          void setLastReaderBookId(nextBook.id);
+          setDisplayProgress(nextBook?.progress ?? 0);
+          setCurrentChapterIndex(nextBook?.currentChapter ?? 0);
+          restoreProgressGuard.current =
+            nextBook && nextBook.progress > 0.005
+              ? { bookId: nextBook.id, progress: nextBook.progress, until: Date.now() + 6000 }
+              : null;
+          setCurrentEpubHref(undefined);
+          setEpubReaderKey((key) => key + 1);
+          setEpubChapterTitle('');
+          setEpubHtmlBook(null);
+          setEpubSeekRequest(null);
+          setEpubPagedSeekRequest(null);
+          setEpubPagedTurnRequest(null);
+          setPdfTurnRequest(null);
+          setTextTurnRequest(null);
+          if (nextBook?.format === 'txt') {
+            const nextChapters = await loadTextChapters(nextBook);
+            if (!mounted) return;
+            const nextTextBlocks = buildTextBlocks(nextChapters);
+            const restoredOffset = Math.round(clamp(Math.floor(nextBook.currentOffset), 0, Math.max(0, nextTextBlocks.length - 1)));
+            const windowStart = Math.max(0, restoredOffset - 2);
+            const restoredBook = { ...nextBook, currentOffset: restoredOffset };
+            const restoredChapter = nextTextBlocks[restoredOffset]?.chapterIndex ?? nextBook.currentChapter;
+            setBook(restoredBook);
+            setCurrentChapterIndex(restoredChapter);
+            setChapters(nextChapters);
+            setTextWindowStart(windowStart);
+            setTextScrollRequest(null);
+            setRenderedBlockCount(Math.min(nextTextBlocks.length, Math.max(windowStart + INITIAL_TEXT_BLOCKS, restoredOffset + TEXT_BLOCK_INCREMENT)));
+          } else if (nextBook.format === 'epub') {
+            const nextEpub = await loadEpubHtmlBook(nextBook.fileUri);
+            if (!mounted) return;
+            setChapters([]);
+            setTextWindowStart(0);
+            setTextScrollRequest(null);
+            setEpubToc(
+              nextEpub.chapters
+                .map((chapter) => ({ id: chapter.id, href: chapter.href, title: chapter.title.trim(), text: '' }))
+                .filter((chapter) => chapter.title.length > 0)
+            );
+            const { index: restoredIndex, offset: restoredOffset } = resolveEpubRestorePosition(nextBook, nextEpub);
+            const restoredBook = { ...nextBook, currentChapter: restoredIndex, currentOffset: restoredOffset };
+            setBook(restoredBook);
+            setCurrentChapterIndex(restoredIndex);
+            setCurrentEpubHref(nextEpub.chapters[restoredIndex]?.href);
+            setEpubChapterTitle(nextEpub.chapters[restoredIndex]?.title ?? '');
+            setEpubHtmlBook(nextEpub);
+          } else {
+            setBook(nextBook);
+            setChapters([]);
+            setTextWindowStart(0);
+            setTextScrollRequest(null);
+          }
+        } catch (error) {
+          if (mounted) {
+            showToast(error instanceof Error ? error.message : t('operationFailed'));
+          }
         }
       }
       load();
       return () => {
         mounted = false;
       };
-    }, [bookId])
+    }, [bookId, showToast, t])
   );
 
   useEffect(() => {
@@ -262,7 +272,7 @@ export default function ReaderScreen() {
       batteryLevelSubscription?.remove();
       batteryStateSubscription?.remove();
     };
-  }, []);
+  }, [showToast, t]);
 
   const backgroundColor = readerBackgroundFor(settings, systemColorScheme);
   const foregroundColor = readerForegroundFor(settings, systemColorScheme);
@@ -274,7 +284,11 @@ export default function ReaderScreen() {
     const next = { ...settings, ...patch };
     settingsRef.current = next;
     setSettings(next);
-    await saveReadingSettings(next);
+    try {
+      await saveReadingSettings(next);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('operationFailed'));
+    }
   };
 
   const flushProgressSave = useCallback(async () => {
@@ -286,7 +300,14 @@ export default function ReaderScreen() {
       saveTimer.current = null;
     }
     pendingProgress.current = null;
-    await updateBookProgress(currentBook.id, pending.progress, pending.chapter, pending.offset, pending.location);
+    try {
+      await updateBookProgress(currentBook.id, pending.progress, pending.chapter, pending.offset, pending.location);
+    } catch (error) {
+      if (mountedRef.current) {
+        showToast(error instanceof Error ? error.message : t('operationFailed'));
+      }
+      return;
+    }
     if (mountedRef.current) {
       setBook((current) =>
         current?.id === currentBook.id
@@ -300,7 +321,7 @@ export default function ReaderScreen() {
           : current
       );
     }
-  }, []);
+  }, [showToast, t]);
 
   const rebuildEpubReader = useCallback(async () => {
     await flushProgressSave();
@@ -531,7 +552,7 @@ export default function ReaderScreen() {
         </Text>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="关闭阅读"
+          accessibilityLabel={t('closeReader')}
           disabled={!toolbarOpen}
           pointerEvents={toolbarOpen ? 'auto' : 'none'}
           onPress={closeReader}
@@ -661,7 +682,7 @@ export default function ReaderScreen() {
       {toolbarOpen ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="关闭工具栏"
+          accessibilityLabel={t('closeToolbar')}
           onPress={closeToolbar}
           style={styles.toolbarBackdrop}
         />
@@ -716,7 +737,7 @@ export default function ReaderScreen() {
         <View style={[styles.toolbar, { backgroundColor: toolbarSurface, borderTopColor: toolbarBorder }]}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="目录"
+            accessibilityLabel={t('toc')}
             onPress={() => {
               animateLayoutIfEnabled(settings.einkOptimization);
               setSheet('toc');
@@ -726,7 +747,7 @@ export default function ReaderScreen() {
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="背景"
+            accessibilityLabel={t('background')}
             accessibilityState={{ disabled: book.format === 'pdf' }}
             disabled={book.format === 'pdf'}
             onPress={() => {
@@ -738,7 +759,7 @@ export default function ReaderScreen() {
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="进度"
+            accessibilityLabel={t('progress')}
             onPress={() => {
               animateLayoutIfEnabled(settings.einkOptimization);
               setSheet('progress');
@@ -748,7 +769,7 @@ export default function ReaderScreen() {
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="字体"
+            accessibilityLabel={t('font')}
             accessibilityState={{ disabled: book.format === 'pdf' }}
             disabled={book.format === 'pdf'}
             onPress={() => {
@@ -793,6 +814,7 @@ function TextScrollPane({
   onProgress: (progress: number, chapter: number, offset: number) => void;
   onToggleToolbar: () => void;
 }) {
+  const { t } = useTranslation();
   const listRef = useRef<FlatList<TextBlock>>(null);
   const hasRestored = useRef(false);
   const isDragging = useRef(false);
@@ -935,7 +957,7 @@ function TextScrollPane({
         blocks.length < totalBlocks ? (
           <View style={styles.lazyFooter}>
             <ActivityIndicator color={foregroundColor} />
-            <Text style={[styles.lazyFooterText, { color: foregroundColor }]}>继续载入后续章节</Text>
+            <Text style={[styles.lazyFooterText, { color: foregroundColor }]}>{t('loadMoreChapters')}</Text>
           </View>
         ) : null
       }
@@ -945,7 +967,7 @@ function TextScrollPane({
           paddingHorizontal: 18 + settings.paddingScale * 18,
         },
       ]}
-      accessibilityLabel={`正文，共 ${totalChapters} 个章节`}
+      accessibilityLabel={t('bodyChaptersA11y', { count: totalChapters })}
     />
   );
 }
@@ -1221,18 +1243,19 @@ function PageTurnButtons({
   onPrevious: () => void;
   onNext: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <View pointerEvents="box-none" style={styles.pageButtons}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="上一页"
+        accessibilityLabel={t('previousPage')}
         onPress={onPrevious}
         style={styles.pageButton}>
         <ChevronLeft size={28} color={foregroundColor} />
       </Pressable>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="下一页"
+        accessibilityLabel={t('nextPage')}
         onPress={onNext}
         style={styles.pageButton}>
         <ChevronRight size={28} color={foregroundColor} />
@@ -1242,10 +1265,11 @@ function PageTurnButtons({
 }
 
 function BatteryBadge({ value, color }: { value: number | null; color: string }) {
+  const { t } = useTranslation();
   const batteryText = value === null ? '--' : String(Math.round(clamp(value, 0, 100)));
 
   return (
-    <View style={styles.batteryBadge} accessibilityLabel={`电量 ${value === null ? '未知' : `${value}%`}`}>
+    <View style={styles.batteryBadge} accessibilityLabel={value === null ? t('batteryUnknown') : t('batteryValue', { value })}>
       <View style={[styles.batteryBody, { borderColor: color }]}>
         <Text style={[styles.batteryBadgeText, { color }]}>{batteryText}</Text>
       </View>

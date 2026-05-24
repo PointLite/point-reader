@@ -33,11 +33,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useToast } from '@/components/app-toast';
 import { BookCard } from '@/components/book-card';
 import { InkButton } from '@/components/ink-button';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
 import { clearBooksGroup, createGroupForBooks, deleteBooks, getBook, listGroups, searchBooks, updateGroupName } from '@/lib/books';
 import { importPickedBooks } from '@/lib/importBooks';
+import { useTranslation, type I18nKey } from '@/lib/i18n';
 import { clearLastReaderBookId, getLastReaderBookId } from '@/lib/lastReader';
 import { INTERACTION_ANIMATION_MS, animateLayoutIfEnabled, modalAnimationType, useEinkOptimization } from '@/lib/motion';
 import { loadSortState, saveSortState } from '@/lib/settings';
@@ -49,16 +51,18 @@ type FolderItem = BookGroup & { books: Book[] };
 type ShelfItem = { type: 'book'; book: Book } | { type: 'folder'; folder: FolderItem } | { type: 'import' };
 
 const sortLabels: Record<SortField, string> = {
-  updatedAt: '最近',
-  title: '书名',
-  author: '作者',
-  progress: '进度',
+  updatedAt: 'shelfSortRecent',
+  title: 'shelfSortTitle',
+  author: 'shelfSortAuthor',
+  progress: 'shelfSortProgress',
 };
 
 const SORT_POPOVER_WIDTH = 156;
 
 export default function ShelfScreen() {
   const { width, height } = useWindowDimensions();
+  const { t, language } = useTranslation();
+  const showToast = useToast();
   const { colors } = useAppTheme();
   const einkOptimization = useEinkOptimization();
   const [books, setBooks] = useState<Book[]>([]);
@@ -148,19 +152,26 @@ export default function ShelfScreen() {
     if (shouldShowLoading) {
       setLoading(true);
     }
-    const nextSort = await loadSortState();
-    if (refreshRequestRef.current !== requestId) return;
-    sortRef.current = nextSort;
-    setSort(nextSort);
-    const [nextBooks, nextGroups] = await Promise.all([searchBooks(queryRef.current, nextSort), listGroups()]);
-    if (refreshRequestRef.current !== requestId) return;
-    setBooks(nextBooks);
-    setGroups(nextGroups);
-    hasLoadedShelfRef.current = true;
-    if (shouldShowLoading) {
-      setLoading(false);
+    try {
+      const nextSort = await loadSortState();
+      if (refreshRequestRef.current !== requestId) return;
+      sortRef.current = nextSort;
+      setSort(nextSort);
+      const [nextBooks, nextGroups] = await Promise.all([searchBooks(queryRef.current, nextSort), listGroups()]);
+      if (refreshRequestRef.current !== requestId) return;
+      setBooks(nextBooks);
+      setGroups(nextGroups);
+      hasLoadedShelfRef.current = true;
+    } catch (error) {
+      if (refreshRequestRef.current === requestId) {
+        showToast(error instanceof Error ? error.message : t('operationFailed'));
+      }
+    } finally {
+      if (refreshRequestRef.current === requestId && shouldShowLoading) {
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [showToast, t]);
 
   useFocusEffect(
     useCallback(() => {
@@ -173,21 +184,27 @@ export default function ShelfScreen() {
     restoredLastReaderRef.current = true;
     let mounted = true;
     async function restoreLastReader() {
-      const lastBookId = await getLastReaderBookId();
-      if (!mounted || !lastBookId) return;
-      const lastBook = await getBook(lastBookId);
-      if (!mounted) return;
-      if (!lastBook) {
-        await clearLastReaderBookId(lastBookId);
-        return;
+      try {
+        const lastBookId = await getLastReaderBookId();
+        if (!mounted || !lastBookId) return;
+        const lastBook = await getBook(lastBookId);
+        if (!mounted) return;
+        if (!lastBook) {
+          await clearLastReaderBookId(lastBookId);
+          return;
+        }
+        router.replace({ pathname: '/reader/[bookId]', params: { bookId: lastBook.id, entry: 'restore' } });
+      } catch (error) {
+        if (mounted) {
+          showToast(error instanceof Error ? error.message : t('operationFailed'));
+        }
       }
-      router.replace({ pathname: '/reader/[bookId]', params: { bookId: lastBook.id, entry: 'restore' } });
     }
     void restoreLastReader();
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [showToast, t]);
 
   useEffect(() => {
     if (webDavImport.status !== 'success') return;
@@ -195,6 +212,13 @@ export default function ShelfScreen() {
     handledWebDavImportRef.current = webDavImport.updatedAt;
     void refresh();
   }, [refresh, webDavImport.status, webDavImport.updatedAt]);
+
+  useEffect(() => {
+    if (webDavImport.status !== 'error' || !webDavImport.message) return;
+    if (handledWebDavImportRef.current === webDavImport.updatedAt) return;
+    handledWebDavImportRef.current = webDavImport.updatedAt;
+    showToast(webDavImport.message);
+  }, [showToast, webDavImport.message, webDavImport.status, webDavImport.updatedAt]);
 
   useEffect(() => {
     return () => {
@@ -218,10 +242,14 @@ export default function ShelfScreen() {
   };
 
   const applySort = async (next: SortState) => {
-    sortRef.current = next;
-    setSort(next);
-    await saveSortState(next);
-    setBooks(await searchBooks(queryRef.current, next));
+    try {
+      sortRef.current = next;
+      setSort(next);
+      await saveSortState(next);
+      setBooks(await searchBooks(queryRef.current, next));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('operationFailed'));
+    }
   };
 
   const setSortField = async (field: SortField) => {
@@ -240,11 +268,11 @@ export default function ShelfScreen() {
       await importPickedBooks();
       await refresh();
     } catch (error) {
-      Alert.alert('导入失败', error instanceof Error ? error.message : '无法打开文件选择器');
+      showToast(error instanceof Error ? error.message : t('importFilePickerFailed'));
     } finally {
       setImporting(false);
     }
-  }, [refresh]);
+  }, [refresh, showToast, t]);
 
   const closeImportOptions = useCallback(
     (afterClose?: () => void) => {
@@ -328,16 +356,21 @@ export default function ShelfScreen() {
 
   const createGroupSelection = () => {
     if (selectedCount < 2) return;
-    Alert.alert('创建文件夹', `将已选 ${selectedCount} 本书归类到一个文件夹中？`, [
-      { text: '取消', style: 'cancel' },
+    Alert.alert(t('createFolder'), t('createFolderMessage', { count: selectedCount }), [
+      { text: t('cancel'), style: 'cancel' },
       {
-        text: '创建',
+        text: t('create'),
         onPress: async () => {
-          const nextGroup = await createGroupForBooks(selectedIds);
-          setSelectedIds([]);
-          setActiveGroupId(null);
-          await refresh();
-          setActiveGroupId(nextGroup.id);
+          try {
+            const dateLabel = new Date().toLocaleDateString(language === 'en' ? 'en-US' : 'zh-CN', { month: 'numeric', day: 'numeric' });
+            const nextGroup = await createGroupForBooks(selectedIds, t('defaultFolderName', { date: dateLabel }));
+            setSelectedIds([]);
+            setActiveGroupId(null);
+            await refresh();
+            setActiveGroupId(nextGroup.id);
+          } catch (error) {
+            showToast(error instanceof Error ? error.message : t('operationFailed'));
+          }
         },
       },
     ]);
@@ -345,14 +378,18 @@ export default function ShelfScreen() {
 
   const ungroupSelection = () => {
     if (!activeGroupId || selectedCount < 1) return;
-    Alert.alert('取消分组', `将已选 ${selectedCount} 本书移出当前文件夹？`, [
-      { text: '取消', style: 'cancel' },
+    Alert.alert(t('ungroup'), t('ungroupBooksMessage', { count: selectedCount }), [
+      { text: t('cancel'), style: 'cancel' },
       {
-        text: '移出',
+        text: t('moveOut'),
         onPress: async () => {
-          await clearBooksGroup(selectedIds);
-          setSelectedIds([]);
-          await refresh();
+          try {
+            await clearBooksGroup(selectedIds);
+            setSelectedIds([]);
+            await refresh();
+          } catch (error) {
+            showToast(error instanceof Error ? error.message : t('operationFailed'));
+          }
         },
       },
     ]);
@@ -360,14 +397,18 @@ export default function ShelfScreen() {
 
   const ungroupSelectedFolder = () => {
     if (!folderSelection) return;
-    Alert.alert('取消分组', `将“${folderSelection.name}”中的 ${folderSelection.books.length} 本书移出文件夹？`, [
-      { text: '取消', style: 'cancel' },
+    Alert.alert(t('ungroup'), t('ungroupFolderMessage', { name: folderSelection.name, count: folderSelection.books.length }), [
+      { text: t('cancel'), style: 'cancel' },
       {
-        text: '移出',
+        text: t('moveOut'),
         onPress: async () => {
-          await clearBooksGroup(folderSelection.books.map((book) => book.id));
-          setSelectedFolderId(null);
-          await refresh();
+          try {
+            await clearBooksGroup(folderSelection.books.map((book) => book.id));
+            setSelectedFolderId(null);
+            await refresh();
+          } catch (error) {
+            showToast(error instanceof Error ? error.message : t('operationFailed'));
+          }
         },
       },
     ]);
@@ -381,21 +422,29 @@ export default function ShelfScreen() {
 
   const saveRenameGroup = async () => {
     if (!activeGroup) return;
-    await updateGroupName(activeGroup.id, renameGroupName);
-    setRenameGroupOpen(false);
-    await refresh();
+    try {
+      await updateGroupName(activeGroup.id, renameGroupName);
+      setRenameGroupOpen(false);
+      await refresh();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('operationFailed'));
+    }
   };
 
   const deleteSelection = () => {
-    Alert.alert('删除书籍', `确定删除已选 ${selectedCount} 本书？`, [
-      { text: '取消', style: 'cancel' },
+    Alert.alert(t('deleteBooks'), t('deleteBooksMessage', { count: selectedCount }), [
+      { text: t('cancel'), style: 'cancel' },
       {
-        text: '删除',
+        text: t('delete'),
         style: 'destructive',
         onPress: async () => {
-          await deleteBooks(selectedIds);
-          setSelectedIds([]);
-          await refresh();
+          try {
+            await deleteBooks(selectedIds);
+            setSelectedIds([]);
+            await refresh();
+          } catch (error) {
+            showToast(error instanceof Error ? error.message : t('operationFailed'));
+          }
         },
       },
     ]);
@@ -404,8 +453,12 @@ export default function ShelfScreen() {
   const updateQuery = useCallback(async (text: string) => {
     queryRef.current = text;
     setQuery(text);
-    setBooks(await searchBooks(text, sortRef.current));
-  }, []);
+    try {
+      setBooks(await searchBooks(text, sortRef.current));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('operationFailed'));
+    }
+  }, [showToast, t]);
 
   const keyExtractor = useCallback((item: ShelfItem) => {
     if (item.type === 'book') return item.book.id;
@@ -453,6 +506,7 @@ export default function ShelfScreen() {
         query={query}
         bookCount={books.length}
         moreButtonRef={moreButtonRef}
+        t={t}
         onChangeQuery={updateQuery}
         onToggleSortMenu={toggleSortMenu}
       />
@@ -485,28 +539,28 @@ export default function ShelfScreen() {
       {selectionMode ? (
         <View style={[styles.selectionSheet, { borderColor: colors.text, backgroundColor: colors.surface }]}>
           <Text style={[styles.selectionTitle, { color: colors.text }]}>
-            {folderSelection ? `已选择 1 个文件夹` : `已选择 ${selectedCount} 本`}
+            {folderSelection ? t('selectedFolder') : t('selectedBooks', { count: selectedCount })}
           </Text>
           <View style={styles.sheetActions}>
             {folderSelection ? (
-              <InkButton colors={colors} label="取消分组" icon={FolderPlus} onPress={ungroupSelectedFolder} />
+              <InkButton colors={colors} label={t('ungroup')} icon={FolderPlus} onPress={ungroupSelectedFolder} />
             ) : (
               <>
                 <InkButton
                   colors={colors}
-                  label={activeGroupId ? '取消分组' : '分组'}
+                  label={activeGroupId ? t('ungroup') : t('group')}
                   icon={FolderPlus}
                   disabled={activeGroupId ? selectedCount < 1 : selectedCount < 2}
                   onPress={activeGroupId ? ungroupSelection : createGroupSelection}
                 />
                 <InkButton
                   colors={colors}
-                  label="详情"
+                  label={t('details')}
                   icon={Info}
                   disabled={selectedCount !== 1}
                   onPress={() => router.push({ pathname: '/book/[bookId]', params: { bookId: selectedIds[0] } })}
                 />
-                <InkButton colors={colors} label="删除" icon={Trash2} variant="danger" onPress={deleteSelection} />
+                <InkButton colors={colors} label={t('delete')} icon={Trash2} variant="danger" onPress={deleteSelection} />
               </>
             )}
           </View>
@@ -517,7 +571,7 @@ export default function ShelfScreen() {
         <View style={styles.sortModalLayer}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="关闭排序菜单"
+            accessibilityLabel={t('closeSortMenu')}
             onPress={() => setShowSort(false)}
             style={StyleSheet.absoluteFillObject}
           />
@@ -539,7 +593,7 @@ export default function ShelfScreen() {
                 <Pressable
                   key={field}
                   accessibilityRole="button"
-                  accessibilityLabel={`按${sortLabels[field]}排序`}
+                  accessibilityLabel={t('sortBy', { label: t(sortLabels[field] as I18nKey) })}
                   onPress={() => setSortField(field)}
                   style={({ pressed }) => [
                     styles.sortMenuItem,
@@ -550,15 +604,15 @@ export default function ShelfScreen() {
                     {selected ? <Check size={18} color={colors.surface} strokeWidth={3} /> : null}
                   </View>
                   <Text style={[styles.sortMenuText, { color: colors.text }, selected && { color: colors.surface }]}>
-                    {sortLabels[field]}
+                    {t(sortLabels[field] as I18nKey)}
                   </Text>
                 </Pressable>
               );
             })}
             <View style={[styles.sortMenuSeparator, { backgroundColor: colors.border }]} />
             {([
-              { direction: 'asc', label: '升序', icon: ArrowDownAZ },
-              { direction: 'desc', label: '降序', icon: ArrowUpAZ },
+              { direction: 'asc', label: t('ascending'), icon: ArrowDownAZ },
+              { direction: 'desc', label: t('descending'), icon: ArrowUpAZ },
             ] as const).map((item) => {
               const selected = item.direction === sort.direction;
               const Icon = item.icon;
@@ -588,7 +642,7 @@ export default function ShelfScreen() {
         <View style={styles.importModalLayer}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="关闭导入方式"
+            accessibilityLabel={t('closeImportOptions')}
             onPress={() => closeImportOptions()}
             style={StyleSheet.absoluteFillObject}
           />
@@ -607,21 +661,21 @@ export default function ShelfScreen() {
                 ],
               },
             ]}>
-            <Text style={[styles.importSheetTitle, { color: colors.text }]}>添加书籍</Text>
-            <Text style={[styles.importSheetHint, { color: colors.textSecondary }]}>选择导入来源</Text>
+            <Text style={[styles.importSheetTitle, { color: colors.text }]}>{t('addBooks')}</Text>
+            <Text style={[styles.importSheetHint, { color: colors.textSecondary }]}>{t('chooseImportSource')}</Text>
             <View style={styles.importActions}>
               <ImportAction
                 colors={colors}
                 icon={FilePlus2}
-                title="本地文件"
-                description="从设备中选择 EPUB、TXT 或 PDF"
+                title={t('localFiles')}
+                description={t('localFilesDesc')}
                 onPress={onImport}
               />
               <ImportAction
                 colors={colors}
                 icon={Cloud}
                 title="WebDAV"
-                description="浏览已保存的 WebDAV 目录"
+                description={t('webdavDesc')}
                 onPress={() => {
                   closeImportOptions(() => router.push('/webdav'));
                 }}
@@ -635,14 +689,14 @@ export default function ShelfScreen() {
         <View style={styles.renameModalLayer}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="关闭重命名"
+            accessibilityLabel={t('renameFolder')}
             onPress={() => setRenameGroupOpen(false)}
             style={StyleSheet.absoluteFillObject}
           />
           <View style={[styles.renameCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-            <Text style={[styles.renameTitle, { color: colors.text }]}>修改文件夹名称</Text>
+            <Text style={[styles.renameTitle, { color: colors.text }]}>{t('renameFolder')}</Text>
             <TextInput
-              accessibilityLabel="文件夹名称"
+              accessibilityLabel={t('folderName')}
               value={renameGroupName}
               onChangeText={setRenameGroupName}
               autoFocus
@@ -650,8 +704,8 @@ export default function ShelfScreen() {
               style={[styles.renameInput, { borderColor: colors.border, color: colors.text }]}
             />
             <View style={styles.renameActions}>
-              <InkButton colors={colors} label="取消" variant="quiet" onPress={() => setRenameGroupOpen(false)} />
-              <InkButton colors={colors} label="保存" variant="primary" disabled={!renameGroupName.trim()} onPress={saveRenameGroup} />
+              <InkButton colors={colors} label={t('cancel')} variant="quiet" onPress={() => setRenameGroupOpen(false)} />
+              <InkButton colors={colors} label={t('save')} variant="primary" disabled={!renameGroupName.trim()} onPress={saveRenameGroup} />
             </View>
           </View>
         </View>
@@ -673,6 +727,7 @@ function ShelfListHeader({
   onBack: () => void;
   onRename: () => void;
 }) {
+  const { t } = useTranslation();
   if (!activeGroup && webDavImport.status === 'idle') return null;
 
   return (
@@ -684,14 +739,14 @@ function ShelfListHeader({
         <View style={[styles.groupHeader, { borderColor: colors.border, backgroundColor: colors.surface }]}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="返回书架"
+            accessibilityLabel={t('backToShelf')}
             onPress={onBack}
             style={({ pressed }) => [styles.groupBackButton, pressed && styles.sortMenuItemPressed]}>
             <ChevronLeft size={22} color={colors.text} strokeWidth={2.4} />
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="修改文件夹名称"
+            accessibilityLabel={t('renameFolder')}
             onPress={onRename}
             style={({ pressed }) => [styles.groupHeaderCopy, pressed && styles.sortMenuItemPressed]}>
             <Text style={[styles.groupHeaderTitle, { color: colors.text }]} numberOfLines={1}>
@@ -711,14 +766,15 @@ function WebDavImportProgressRow({
   colors: AppColors;
   state: WebDavImportSnapshot;
 }) {
+  const { t } = useTranslation();
   const progress = state.total > 0 ? Math.min(1, state.completed / state.total) : 0;
-  const progressLabel = state.total > 0 ? `${state.completed}/${state.total}` : '准备中';
+  const progressLabel = state.total > 0 ? `${state.completed}/${state.total}` : t('preparing');
   const title =
     state.status === 'running'
-      ? 'WebDAV 正在导入'
+      ? t('webdavImporting')
       : state.status === 'success'
-        ? 'WebDAV 导入完成'
-        : 'WebDAV 导入失败';
+        ? t('webdavImportSuccess')
+        : t('webdavImportFailed');
   const detail = state.message ?? progressLabel;
 
   return (
@@ -732,7 +788,7 @@ function WebDavImportProgressRow({
       {state.status === 'running' ? (
         <ActivityIndicator color={colors.text} />
       ) : (
-        <Text style={[styles.webDavImportResult, { color: colors.textSecondary }]}>{state.imported} 本</Text>
+        <Text style={[styles.webDavImportResult, { color: colors.textSecondary }]}>{t('importedBooks', { count: state.imported })}</Text>
       )}
       <View style={[styles.webDavImportTrack, { backgroundColor: colors.backgroundElement }]}>
         <View style={[styles.webDavImportFill, { backgroundColor: colors.text, width: `${progress * 100}%` }]} />
@@ -756,11 +812,12 @@ function FolderCard({
   onPress: () => void;
   onLongPress: () => void;
 }) {
+  const { t } = useTranslation();
   const previews = folder.books.slice(0, 9);
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${folder.name}，${folder.books.length} 本书`}
+      accessibilityLabel={`${folder.name}, ${t('booksCount', { count: folder.books.length })}`}
       onPress={onPress}
       onLongPress={onLongPress}
       style={({ pressed }) => [styles.folderCard, { width }, pressed && styles.sortMenuItemPressed]}>
@@ -792,7 +849,7 @@ function FolderCard({
         <Text style={[styles.folderTitle, { color: colors.text }]} numberOfLines={2}>
           {folder.name}
         </Text>
-        <Text style={[styles.folderCount, { color: colors.textSecondary }]}>{folder.books.length} 本书</Text>
+        <Text style={[styles.folderCount, { color: colors.textSecondary }]}>{t('booksCount', { count: folder.books.length })}</Text>
       </View>
     </Pressable>
   );
@@ -837,6 +894,7 @@ const ShelfHeader = memo(function ShelfHeader({
   query,
   bookCount,
   moreButtonRef,
+  t,
   onChangeQuery,
   onToggleSortMenu,
 }: {
@@ -844,6 +902,7 @@ const ShelfHeader = memo(function ShelfHeader({
   query: string;
   bookCount: number;
   moreButtonRef: React.RefObject<View | null>;
+  t: ReturnType<typeof useTranslation>['t'];
   onChangeQuery: (text: string) => void;
   onToggleSortMenu: () => void;
 }) {
@@ -853,8 +912,8 @@ const ShelfHeader = memo(function ShelfHeader({
         <View style={[styles.searchBox, { borderColor: colors.border, backgroundColor: colors.surface }]}>
           <Search size={20} color={colors.textSecondary} strokeWidth={2.2} />
           <TextInput
-            accessibilityLabel="搜索书籍"
-            placeholder={`在 ${bookCount} 本书籍中搜索...`}
+            accessibilityLabel={t('searchBooks')}
+            placeholder={t('searchBooksPlaceholder', { count: bookCount })}
             placeholderTextColor={colors.textSecondary}
             value={query}
             onChangeText={onChangeQuery}
@@ -864,7 +923,7 @@ const ShelfHeader = memo(function ShelfHeader({
         <View ref={moreButtonRef} style={styles.moreMenuAnchor}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="排序"
+            accessibilityLabel={t('sort')}
             onPress={onToggleSortMenu}
             style={[styles.headerIconButton, { borderColor: colors.border, backgroundColor: colors.surface }]}>
             <CircleEllipsis size={24} color={colors.text} strokeWidth={2.2} />
@@ -872,7 +931,7 @@ const ShelfHeader = memo(function ShelfHeader({
         </View>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="设置"
+          accessibilityLabel={t('settings')}
           onPress={() => router.push('/settings')}
           style={[styles.headerIconButton, { borderColor: colors.border, backgroundColor: colors.surface }]}>
           <Settings size={24} color={colors.text} strokeWidth={2.2} />
@@ -893,10 +952,11 @@ function ImportTile({
   colors: AppColors;
   onPress: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="导入书籍"
+      accessibilityLabel={t('importBooks')}
       disabled={importing}
       onPress={onPress}
       style={({ pressed }) => [

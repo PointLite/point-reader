@@ -13,6 +13,7 @@ import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'rea
 
 import { ReaderMetricControl } from '@/components/reader/metric-control';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
+import { useTranslation } from '@/lib/i18n';
 import { readerBackgrounds } from '@/lib/readerContent';
 import type { AppColors } from '@/lib/theme';
 import type { ReaderChapter, ReadingSettings } from '@/types/reader';
@@ -52,15 +53,16 @@ export function ReaderSheet({
   onSeekProgress: (progress: number) => void;
   resolveChapterIndex?: (href: string | undefined, fallbackIndex: number) => number;
 }) {
+  const { t } = useTranslation();
   const [localSettings, setLocalSettings] = useState(settings);
   const tocListRef = useRef<ScrollView>(null);
   const themeDisabled = disabledSheets.includes('theme');
   const fontDisabled = disabledSheets.includes('font');
   const sheetTitle = {
-    toc: '章节',
-    theme: '背景',
-    progress: '进度',
-    font: '字体',
+    toc: t('toc'),
+    theme: t('background'),
+    progress: t('progress'),
+    font: t('font'),
   }[sheet];
 
   useEffect(() => {
@@ -121,7 +123,7 @@ export function ReaderSheet({
           </ScrollView>
         ) : (
           <View style={styles.emptyToc}>
-            <Text style={[styles.emptyTocText, { color: colors.textSecondary }]}>暂无章节信息</Text>
+            <Text style={[styles.emptyTocText, { color: colors.textSecondary }]}>{t('noChapters')}</Text>
           </View>
         )
       ) : null}
@@ -131,7 +133,7 @@ export function ReaderSheet({
             <Pressable
               key={name}
               accessibilityRole="button"
-              accessibilityLabel={`背景 ${name}`}
+              accessibilityLabel={`${t('background')} ${name}`}
               onPress={() => {
                 applyReaderSettings({ background: name });
               }}
@@ -173,7 +175,7 @@ export function ReaderSheet({
             leftLabel="A"
             rightLabel="A"
             valueLabel={`${localSettings.fontSize}`}
-            accessibilityLabel="文字大小"
+            accessibilityLabel={t('fontSize')}
             onValue={(value) => applyReaderSettings({ fontSize: value })}
           />
           <View style={styles.metricGrid}>
@@ -183,12 +185,12 @@ export function ReaderSheet({
               min={0.5}
               max={1.8}
               step={0.1}
-              leftLabel="小"
-              rightLabel="大"
-              valueLabel="边距"
+              leftLabel={t('small')}
+              rightLabel={t('large')}
+              valueLabel={t('padding')}
               icon={SquareDashed}
               compact
-              accessibilityLabel="文字内边距"
+              accessibilityLabel={t('textPadding')}
               onValue={(value) => applyReaderSettings({ paddingScale: value })}
             />
             <ReaderMetricControl
@@ -197,12 +199,12 @@ export function ReaderSheet({
               min={1.2}
               max={1.9}
               step={0.05}
-              leftLabel="小"
-              rightLabel="大"
-              valueLabel="行高"
+              leftLabel={t('small')}
+              rightLabel={t('large')}
+              valueLabel={t('lineHeight')}
               icon={ListChevronsUpDown}
               compact
-              accessibilityLabel="行高"
+              accessibilityLabel={t('lineHeight')}
               onValue={(value) => applyReaderSettings({ lineHeightScale: value })}
             />
           </View>
@@ -225,6 +227,7 @@ function ProgressPanel({
   onPreviousChapter: () => void;
   onNextChapter: () => void;
 }) {
+  const { t } = useTranslation();
   const undoProgress = useRef<number | null>(null);
   const redoProgress = useRef<number | null>(null);
   const currentProgress = useRef(progress);
@@ -293,15 +296,15 @@ function ProgressPanel({
     <View style={styles.progressPanel}>
       <ReaderProgressControl value={progress} colors={colors} onValue={commitSeek} />
       <View style={styles.progressActions}>
-        <Pressable accessibilityRole="button" accessibilityLabel="上一章" onPress={() => jumpChapter(-1)} style={styles.progressActionButton}>
+        <Pressable accessibilityRole="button" accessibilityLabel={t('previousChapter')} onPress={() => jumpChapter(-1)} style={styles.progressActionButton}>
           <ChevronsLeft size={28} color={colors.text} strokeWidth={2.6} />
         </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="后退一点" onPress={() => seekBy(-0.01)} style={styles.progressActionButton}>
+        <Pressable accessibilityRole="button" accessibilityLabel={t('backALittle')} onPress={() => seekBy(-0.01)} style={styles.progressActionButton}>
           <ChevronLeft size={30} color={colors.text} strokeWidth={2.6} />
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="撤销跳转"
+          accessibilityLabel={t('undoSeek')}
           accessibilityState={{ disabled: !canUndo }}
           disabled={!canUndo}
           onPress={undo}
@@ -310,17 +313,17 @@ function ProgressPanel({
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="重做跳转"
+          accessibilityLabel={t('redoSeek')}
           accessibilityState={{ disabled: !canRedo }}
           disabled={!canRedo}
           onPress={redo}
           style={styles.progressActionButton}>
           <RotateCw size={30} color={canRedo ? colors.text : colors.textSecondary} strokeWidth={2.4} />
         </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="前进一点" onPress={() => seekBy(0.01)} style={styles.progressActionButton}>
+        <Pressable accessibilityRole="button" accessibilityLabel={t('forwardALittle')} onPress={() => seekBy(0.01)} style={styles.progressActionButton}>
           <ChevronRight size={30} color={colors.text} strokeWidth={2.6} />
         </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="下一章" onPress={() => jumpChapter(1)} style={styles.progressActionButton}>
+        <Pressable accessibilityRole="button" accessibilityLabel={t('nextChapter')} onPress={() => jumpChapter(1)} style={styles.progressActionButton}>
           <ChevronsRight size={28} color={colors.text} strokeWidth={2.6} />
         </Pressable>
       </View>
@@ -338,6 +341,7 @@ export function ProgressToolIcon({ color, backgroundColor }: { color: string; ba
 }
 
 function ReaderProgressControl({ value, colors, onValue }: { value: number; colors: AppColors; onValue: (value: number) => void }) {
+  const { t } = useTranslation();
   const [trackWidth, setTrackWidth] = useState(0);
   const [localValue, setLocalValue] = useState(value);
   const localValueRef = useRef(value);
@@ -416,15 +420,15 @@ function ReaderProgressControl({ value, colors, onValue }: { value: number; colo
     <View
       ref={controlRef}
       accessibilityRole="adjustable"
-      accessibilityLabel="阅读进度"
+      accessibilityLabel={t('readingProgress')}
       accessibilityValue={{ text: `${Math.round(localValue * 100)}%` }}
       onAccessibilityAction={(event) => {
         if (event.nativeEvent.actionName === 'increment') onValue(clamp(value + 0.01, 0, 1));
         if (event.nativeEvent.actionName === 'decrement') onValue(clamp(value - 0.01, 0, 1));
       }}
       accessibilityActions={[
-        { name: 'increment', label: '前进' },
-        { name: 'decrement', label: '后退' },
+        { name: 'increment', label: t('forward') },
+        { name: 'decrement', label: t('backward') },
       ]}
       onLayout={(event) => {
         setTrackWidth(event.nativeEvent.layout.width);
