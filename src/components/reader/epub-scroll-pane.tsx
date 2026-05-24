@@ -11,7 +11,11 @@ export type EpubSeekRequest = {
   nonce: number;
 };
 
-type EpubScrollCommand = 'jumpTo' | 'jumpToOffset' | 'applySettings';
+export type EpubResumeRequest = {
+  nonce: number;
+};
+
+type EpubScrollCommand = 'jumpTo' | 'jumpToOffset' | 'applySettings' | 'resume';
 
 type EpubScrollWebViewMessage =
   | { type: 'tap' }
@@ -28,6 +32,7 @@ export function EpubScrollPane({
   initialProgress,
   jumpRequest,
   seekRequest,
+  resumeRequest,
   onProgress,
   onToggleToolbar,
   onImagePress,
@@ -41,6 +46,7 @@ export function EpubScrollPane({
   initialProgress: number;
   jumpRequest: { index: number; nonce: number } | null;
   seekRequest: EpubSeekRequest | null;
+  resumeRequest: EpubResumeRequest | null;
   onProgress: (progress: number, chapterIndex: number, href: string, chapterOffset: number) => void;
   onToggleToolbar: () => void;
   onImagePress: (uri: string) => void;
@@ -84,6 +90,11 @@ export function EpubScrollPane({
     injectEpubScrollCommand(webViewRef, 'applySettings', [createEpubCssVars(settings, systemColorScheme)]);
   }, [settings, systemColorScheme]);
 
+  useEffect(() => {
+    if (!resumeRequest) return;
+    injectEpubScrollCommand(webViewRef, 'resume', [createEpubCssVars(settings, systemColorScheme)]);
+  }, [resumeRequest, settings, systemColorScheme]);
+
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
       const payload = parseEpubScrollMessage(event.nativeEvent.data);
@@ -121,6 +132,7 @@ export function EpubScrollPane({
         source={source}
         javaScriptEnabled
         scrollEnabled
+        textZoom={100}
         showsVerticalScrollIndicator={!settings.hideScrollbar}
         onMessage={handleMessage}
         onShouldStartLoadWithRequest={(request) => shouldAllowEpubScrollNavigation(request.url)}
@@ -211,8 +223,8 @@ function createEpubScrollHtml(
 <style>
 ${book.css}
 :root { --reader-bg: ${vars.background}; --reader-fg: ${vars.foreground}; --reader-font-family: ${vars.fontFamily}; --reader-font-size: ${vars.fontSize}; --reader-line-height: ${vars.lineHeight}; --reader-padding: ${vars.padding}; }
-html, body { margin: 0; padding: 0; background: var(--reader-bg); color: var(--reader-fg); font-family: var(--reader-font-family); }
-body { -webkit-text-size-adjust: none; }
+html, body { margin: 0; padding: 0; background: var(--reader-bg); color: var(--reader-fg); font-family: var(--reader-font-family); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 #root { min-height: 100vh; }
 .chapter { box-sizing: border-box; padding: 24px var(--reader-padding) 40px; font-size: var(--reader-font-size); line-height: var(--reader-line-height); overflow-wrap: anywhere; }
 .chapter img, .chapter svg { max-width: 100%; height: auto; }
@@ -636,6 +648,17 @@ body { -webkit-text-size-adjust: none; }
     restoreAnchor(anchor);
   }
 
+  function resume(vars) {
+    if (vars) applySettings(vars);
+    requestAnimationFrame(function () {
+      measureRendered();
+      resetSpacerHeights();
+      maybeLoadMore();
+      markReady();
+      sendProgress(true);
+    });
+  }
+
   function maybeLoadMore() {
     if (isMutating) return;
     var y = window.scrollY || document.documentElement.scrollTop || 0;
@@ -713,7 +736,7 @@ body { -webkit-text-size-adjust: none; }
     sendProgress();
   }, { passive: true });
 
-  window.PointReader = { jumpTo: jumpTo, jumpToOffset: jumpToOffset, jumpToHref: jumpToHref, applySettings: applySettings };
+  window.PointReader = { jumpTo: jumpTo, jumpToOffset: jumpToOffset, jumpToHref: jumpToHref, applySettings: applySettings, resume: resume };
   renderRange(start, end);
   requestAnimationFrame(function () {
     jumpToOffset(${safeInitialIndex}, ${safeInitialOffset}, true);

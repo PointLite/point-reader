@@ -27,8 +27,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useToast } from '@/components/app-toast';
-import { EpubPagedPane, type EpubPagedSeekRequest } from '@/components/reader/epub-paged-pane';
-import { EpubScrollPane, type EpubSeekRequest } from '@/components/reader/epub-scroll-pane';
+import { EpubPagedPane, type EpubPagedResumeRequest, type EpubPagedSeekRequest } from '@/components/reader/epub-paged-pane';
+import { EpubScrollPane, type EpubResumeRequest, type EpubSeekRequest } from '@/components/reader/epub-scroll-pane';
 import { ImagePreviewModal } from '@/components/reader/image-preview-modal';
 import { ProgressToolIcon, ReaderSheet } from '@/components/reader/reader-sheet';
 import { PdfPane } from '@/components/reader/pdf-pane';
@@ -60,7 +60,6 @@ const ACTIVE_TOOL_COLOR = '#3478F6';
 const BATTERY_BODY_WIDTH = 26;
 const BATTERY_BODY_HEIGHT = 14;
 const TAP_ZONE_EDGE_RATIO = 0.35;
-const EPUB_RESUME_REBUILD_THRESHOLD_MS = 1200;
 
 type TapZoneAction = 'previous' | 'toolbar' | 'next';
 
@@ -114,6 +113,8 @@ export default function ReaderScreen() {
   const [epubJumpRequest, setEpubJumpRequest] = useState<{ index: number; nonce: number } | null>(null);
   const [epubSeekRequest, setEpubSeekRequest] = useState<EpubSeekRequest | null>(null);
   const [epubPagedSeekRequest, setEpubPagedSeekRequest] = useState<EpubPagedSeekRequest | null>(null);
+  const [epubResumeRequest, setEpubResumeRequest] = useState<EpubResumeRequest | null>(null);
+  const [epubPagedResumeRequest, setEpubPagedResumeRequest] = useState<EpubPagedResumeRequest | null>(null);
   const [epubPagedTurnRequest, setEpubPagedTurnRequest] = useState<{ delta: -1 | 1; nonce: number } | null>(null);
   const [pdfSeekRequest, setPdfSeekRequest] = useState<PdfSeekRequest | null>(null);
   const [pdfTurnRequest, setPdfTurnRequest] = useState<{ delta: -1 | 1; nonce: number } | null>(null);
@@ -132,7 +133,6 @@ export default function ReaderScreen() {
   const settingsRef = useRef<ReadingSettings>(defaultReadingSettings);
   const mountedRef = useRef(true);
   const appStateRef = useRef(AppState.currentState);
-  const backgroundedAtRef = useRef<number | null>(null);
   const restoreProgressGuard = useRef<RestoreProgressGuard | null>(null);
   const lastToolbarToggleAt = useRef(0);
 
@@ -173,6 +173,8 @@ export default function ReaderScreen() {
           setEpubHtmlBook(null);
           setEpubSeekRequest(null);
           setEpubPagedSeekRequest(null);
+          setEpubResumeRequest(null);
+          setEpubPagedResumeRequest(null);
           setEpubPagedTurnRequest(null);
           setPdfTurnRequest(null);
           setTextTurnRequest(null);
@@ -351,23 +353,19 @@ export default function ReaderScreen() {
       appStateRef.current = nextState;
 
       if (nextState !== 'active') {
-        if (previousState === 'active') {
-          backgroundedAtRef.current = Date.now();
-        }
         void flushProgressSave();
         return;
       }
 
       if (previousState === 'active') return;
-      const backgroundedAt = backgroundedAtRef.current;
-      backgroundedAtRef.current = null;
-      const elapsed = backgroundedAt ? Date.now() - backgroundedAt : 0;
       const currentBook = bookRef.current;
-      if (currentBook?.format !== 'epub' || elapsed < EPUB_RESUME_REBUILD_THRESHOLD_MS) return;
-      void rebuildEpubReader();
+      if (currentBook?.format !== 'epub') return;
+      const nonce = Date.now();
+      setEpubResumeRequest({ nonce });
+      setEpubPagedResumeRequest({ nonce });
     });
     return () => subscription.remove();
-  }, [flushProgressSave, rebuildEpubReader]);
+  }, [flushProgressSave]);
 
   const scheduleProgressSave = useCallback(
     (progress: number, chapter: number, offset: number, location?: string | null) => {
@@ -574,6 +572,7 @@ export default function ReaderScreen() {
               initialProgress={book.progress}
               jumpRequest={epubJumpRequest}
               seekRequest={epubSeekRequest}
+              resumeRequest={epubResumeRequest}
               onToggleToolbar={toggleToolbar}
               onImagePress={openImagePreview}
               onRecoverRequired={rebuildEpubReader}
@@ -604,6 +603,7 @@ export default function ReaderScreen() {
               initialProgress={book.progress}
               jumpRequest={epubJumpRequest}
               seekRequest={epubPagedSeekRequest}
+              resumeRequest={epubPagedResumeRequest}
               turnRequest={epubPagedTurnRequest}
               onTap={handlePagedEpubTap}
               onImagePress={openImagePreview}
@@ -874,8 +874,13 @@ function TextScrollPane({
   const renderItem = useCallback(
     ({ item }: ListRenderItemInfo<TextBlock>) => (
       <View style={styles.chapterBlock}>
-        {item.title ? <Text style={[styles.textChapterTitle, { color: foregroundColor }]}>{item.title}</Text> : null}
+        {item.title ? (
+          <Text allowFontScaling={false} style={[styles.textChapterTitle, { color: foregroundColor }]}>
+            {item.title}
+          </Text>
+        ) : null}
         <Text
+          allowFontScaling={false}
           style={[
             styles.readerText,
             {
@@ -1209,8 +1214,11 @@ function TapTextPane({
             isDragging.current = false;
           }, 120);
         }}>
-        <Text style={[styles.textChapterTitle, { color: foregroundColor }]}>{chapter?.title}</Text>
+        <Text allowFontScaling={false} style={[styles.textChapterTitle, { color: foregroundColor }]}>
+          {chapter?.title}
+        </Text>
         <Text
+          allowFontScaling={false}
           style={[
             styles.readerText,
             {

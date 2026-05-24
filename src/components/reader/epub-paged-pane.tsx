@@ -11,7 +11,11 @@ export type EpubPagedSeekRequest = {
   nonce: number;
 };
 
-type EpubPagedCommand = 'go' | 'jumpTo' | 'jumpToOffset' | 'seekToProgress' | 'applySettings';
+export type EpubPagedResumeRequest = {
+  nonce: number;
+};
+
+type EpubPagedCommand = 'go' | 'jumpTo' | 'jumpToOffset' | 'seekToProgress' | 'applySettings' | 'resume';
 
 type EpubPagedMessage =
   | { type: 'tap'; x?: unknown; width?: unknown }
@@ -28,6 +32,7 @@ export function EpubPagedPane({
   initialProgress,
   jumpRequest,
   seekRequest,
+  resumeRequest,
   turnRequest,
   onProgress,
   onTap,
@@ -42,6 +47,7 @@ export function EpubPagedPane({
   initialProgress: number;
   jumpRequest: { index: number; nonce: number } | null;
   seekRequest: EpubPagedSeekRequest | null;
+  resumeRequest: EpubPagedResumeRequest | null;
   turnRequest: { delta: -1 | 1; nonce: number } | null;
   onProgress: (progress: number, chapterIndex: number, href: string, chapterOffset: number) => void;
   onTap: (x: number, width: number) => void;
@@ -87,6 +93,11 @@ export function EpubPagedPane({
     injectEpubPagedCommand(webViewRef, 'applySettings', [createEpubCssVars(settings, systemColorScheme)]);
   }, [settings, systemColorScheme]);
 
+  useEffect(() => {
+    if (!resumeRequest) return;
+    injectEpubPagedCommand(webViewRef, 'resume', [createEpubCssVars(settings, systemColorScheme)]);
+  }, [resumeRequest, settings, systemColorScheme]);
+
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
       const payload = parseEpubPagedMessage(event.nativeEvent.data);
@@ -124,6 +135,7 @@ export function EpubPagedPane({
         source={source}
         javaScriptEnabled
         scrollEnabled={false}
+        textZoom={100}
         showsHorizontalScrollIndicator={false}
         showsVerticalScrollIndicator={false}
         onMessage={handleMessage}
@@ -213,7 +225,7 @@ function createEpubPagedHtml(
 <style>
 ${book.css}
 :root { --reader-bg: ${vars.background}; --reader-fg: ${vars.foreground}; --reader-font-size: ${vars.fontSize}; --reader-line-height: ${vars.lineHeight}; --reader-padding: ${vars.padding}; }
-html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background: var(--reader-bg); color: var(--reader-fg); font-family: sans-serif; -webkit-text-size-adjust: none; }
+html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background: var(--reader-bg); color: var(--reader-fg); font-family: sans-serif; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { position: fixed; inset: 0; }
 #viewport { position: fixed; inset: 0; overflow: hidden; background: var(--reader-bg); }
 #content { height: 100vh; column-gap: 0; column-fill: auto; transform: translate3d(0, 0, 0); will-change: transform; }
@@ -419,6 +431,18 @@ body { position: fixed; inset: 0; }
     });
   }
 
+  function resume(vars) {
+    if (vars) {
+      applySettings(vars);
+      return;
+    }
+    requestAnimationFrame(function () {
+      measure();
+      markReady();
+      sendProgress(true);
+    });
+  }
+
   function emitTap(event) {
     post({ type: 'tap', x: event.changedTouches && event.changedTouches[0] ? event.changedTouches[0].clientX : event.clientX, width: width });
   }
@@ -466,7 +490,7 @@ body { position: fixed; inset: 0; }
     applyPage(true);
   });
 
-  window.PointReader = { go: go, jumpTo: jumpTo, jumpToOffset: jumpToOffset, seekToProgress: seekToProgress, applySettings: applySettings };
+  window.PointReader = { go: go, jumpTo: jumpTo, jumpToOffset: jumpToOffset, seekToProgress: seekToProgress, applySettings: applySettings, resume: resume };
   renderAll();
   requestAnimationFrame(function () {
     measure();
