@@ -37,6 +37,7 @@ export function ReaderMetricControl({
   const [trackWidth, setTrackWidth] = useState(0);
   const [localValue, setLocalValue] = useState(value);
   const localValueRef = useRef(value);
+  const emittedValueRef = useRef(value);
   const dragging = useRef(false);
   const controlRef = useRef<View>(null);
   const controlPageX = useRef(0);
@@ -48,6 +49,7 @@ export function ReaderMetricControl({
   useEffect(() => {
     if (dragging.current) return;
     localValueRef.current = value;
+    emittedValueRef.current = value;
     setLocalValue(value);
   }, [value]);
 
@@ -59,19 +61,30 @@ export function ReaderMetricControl({
     [max, min, step]
   );
 
-  const setDraftValue = useCallback(
+  const emitValue = useCallback(
     (nextValue: number) => {
+      if (Object.is(emittedValueRef.current, nextValue)) return;
+      emittedValueRef.current = nextValue;
+      onValue(nextValue);
+    },
+    [onValue]
+  );
+
+  const setDraftValue = useCallback(
+    (nextValue: number, emit = false) => {
       const normalized = normalizeValue(nextValue);
       localValueRef.current = normalized;
       setLocalValue(normalized);
+      if (emit) emitValue(normalized);
     },
-    [normalizeValue]
+    [emitValue, normalizeValue]
   );
 
   const commitValue = useCallback(
     (nextValue = localValueRef.current) => {
       const normalized = normalizeValue(nextValue);
       localValueRef.current = normalized;
+      emittedValueRef.current = normalized;
       setLocalValue(normalized);
       onValue(normalized);
     },
@@ -91,7 +104,7 @@ export function ReaderMetricControl({
     (x: number) => {
       if (!trackWidth) return;
       const ratio = clamp((x - thumbWidth / 2) / travelWidth, 0, 1);
-      setDraftValue(min + ratio * (max - min));
+      setDraftValue(min + ratio * (max - min), true);
     },
     [max, min, setDraftValue, thumbWidth, trackWidth, travelWidth]
   );

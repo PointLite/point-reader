@@ -133,6 +133,10 @@ export function EpubScrollPane({
         javaScriptEnabled
         scrollEnabled
         textZoom={100}
+        bounces={false}
+        overScrollMode="never"
+        setBuiltInZoomControls={false}
+        setDisplayZoomControls={false}
         showsVerticalScrollIndicator={!settings.hideScrollbar}
         onMessage={handleMessage}
         onShouldStartLoadWithRequest={(request) => shouldAllowEpubScrollNavigation(request.url)}
@@ -223,12 +227,15 @@ function createEpubScrollHtml(
 <style>
 ${book.css}
 :root { --reader-bg: ${vars.background}; --reader-fg: ${vars.foreground}; --reader-font-family: ${vars.fontFamily}; --reader-font-size: ${vars.fontSize}; --reader-line-height: ${vars.lineHeight}; --reader-padding: ${vars.padding}; }
-html, body { margin: 0; padding: 0; background: var(--reader-bg); color: var(--reader-fg); font-family: var(--reader-font-family); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-#root { min-height: 100vh; }
-.chapter { box-sizing: border-box; padding: 24px var(--reader-padding) 40px; font-size: var(--reader-font-size); line-height: var(--reader-line-height); overflow-wrap: anywhere; }
-.chapter img, .chapter svg { max-width: 100%; height: auto; }
-.chapter p { line-height: var(--reader-line-height) !important; }
+html, body { width: 100%; max-width: 100%; margin: 0; padding: 0; overflow-x: hidden; overscroll-behavior-x: none; background: var(--reader-bg); color: var(--reader-fg); font-family: var(--reader-font-family); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: pan-y; }
+#root { width: 100vw; max-width: 100vw; min-height: 100vh; overflow-x: hidden; }
+.chapter { box-sizing: border-box; width: 100vw !important; max-width: 100vw !important; padding: 24px var(--reader-padding) 40px; font-family: var(--reader-font-family) !important; font-size: var(--reader-font-size) !important; line-height: var(--reader-line-height) !important; overflow-wrap: anywhere; word-break: break-word; overflow-x: hidden; }
+.chapter p, .chapter div, .chapter span, .chapter section, .chapter article, .chapter li, .chapter blockquote, .chapter h1, .chapter h2, .chapter h3, .chapter h4, .chapter h5, .chapter h6, .chapter strong, .chapter em, .chapter b, .chapter i, .chapter ruby, .chapter rt { font-family: inherit !important; font-size: var(--reader-font-size) !important; line-height: var(--reader-line-height) !important; }
+.chapter img, .chapter svg, .chapter video, .chapter canvas, .chapter iframe { width: auto !important; max-width: 100% !important; min-width: 0 !important; height: auto !important; box-sizing: border-box; }
+.chapter table { width: 100% !important; max-width: 100% !important; min-width: 0 !important; table-layout: fixed; border-collapse: collapse; box-sizing: border-box; }
+.chapter pre, .chapter code { width: auto !important; max-width: 100% !important; min-width: 0 !important; box-sizing: border-box; overflow-wrap: anywhere; white-space: pre-wrap; }
+.chapter * { max-width: 100% !important; min-width: 0 !important; box-sizing: border-box; margin-left: 0 !important; margin-right: 0 !important; }
 </style>
 </head>
 <body>
@@ -266,6 +273,38 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   root.appendChild(content);
   root.appendChild(bottomSpacer);
 
+  function viewportWidth() {
+    return Math.max(1, Math.floor(document.documentElement.clientWidth || window.innerWidth || 1));
+  }
+
+  function applyViewportWidth() {
+    var width = viewportWidth() + 'px';
+    document.documentElement.style.setProperty('width', width, 'important');
+    document.documentElement.style.setProperty('max-width', width, 'important');
+    document.documentElement.style.setProperty('box-sizing', 'border-box', 'important');
+    document.documentElement.style.setProperty('overflow-x', 'hidden', 'important');
+    document.documentElement.style.setProperty('margin', '0', 'important');
+    document.documentElement.style.setProperty('padding', '0', 'important');
+    document.body.style.setProperty('width', width, 'important');
+    document.body.style.setProperty('max-width', width, 'important');
+    document.body.style.setProperty('box-sizing', 'border-box', 'important');
+    document.body.style.setProperty('overflow-x', 'hidden', 'important');
+    document.body.style.setProperty('margin', '0', 'important');
+    document.body.style.setProperty('padding', '0', 'important');
+    root.style.setProperty('width', width, 'important');
+    root.style.setProperty('max-width', width, 'important');
+    root.style.setProperty('box-sizing', 'border-box', 'important');
+    root.style.setProperty('overflow-x', 'hidden', 'important');
+    root.style.setProperty('margin', '0', 'important');
+    root.style.setProperty('padding', '0', 'important');
+    content.style.setProperty('width', width, 'important');
+    content.style.setProperty('max-width', width, 'important');
+    content.style.setProperty('box-sizing', 'border-box', 'important');
+    content.style.setProperty('overflow-x', 'hidden', 'important');
+    content.style.setProperty('margin', '0', 'important');
+    content.style.setProperty('padding', '0', 'important');
+  }
+
   function post(payload) {
     window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(payload));
   }
@@ -284,7 +323,89 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     section.setAttribute('data-index', String(index));
     section.setAttribute('data-href', chapter.href);
     section.innerHTML = chapter.html;
+    applyReaderStylesToSection(section);
     return section;
+  }
+
+  function applyReaderStylesToSection(section) {
+    if (!section) return;
+    var width = viewportWidth() + 'px';
+    section.style.setProperty('width', width, 'important');
+    section.style.setProperty('max-width', width, 'important');
+    section.style.setProperty('min-width', '0', 'important');
+    section.style.setProperty('box-sizing', 'border-box', 'important');
+    section.style.setProperty('overflow-x', 'hidden', 'important');
+    section.style.setProperty('font-family', 'var(--reader-font-family)', 'important');
+    section.style.setProperty('font-size', 'var(--reader-font-size)', 'important');
+    section.style.setProperty('line-height', 'var(--reader-line-height)', 'important');
+    section.style.setProperty('padding-left', 'var(--reader-padding)', 'important');
+    section.style.setProperty('padding-right', 'var(--reader-padding)', 'important');
+    section.style.setProperty('margin-left', '0', 'important');
+    section.style.setProperty('margin-right', '0', 'important');
+    var nodes = section.querySelectorAll('p, div, span, section, article, li, blockquote, h1, h2, h3, h4, h5, h6, strong, em, b, i, ruby, rt');
+    for (var index = 0; index < nodes.length; index += 1) {
+      nodes[index].style.setProperty('max-width', '100%', 'important');
+      nodes[index].style.setProperty('min-width', '0', 'important');
+      nodes[index].style.setProperty('box-sizing', 'border-box', 'important');
+      nodes[index].style.setProperty('width', 'auto', 'important');
+      nodes[index].style.setProperty('margin-left', '0', 'important');
+      nodes[index].style.setProperty('margin-right', '0', 'important');
+      nodes[index].style.setProperty('font-family', 'inherit', 'important');
+      nodes[index].style.setProperty('font-size', 'var(--reader-font-size)', 'important');
+      nodes[index].style.setProperty('line-height', 'var(--reader-line-height)', 'important');
+    }
+    var fixedNodes = section.querySelectorAll('img, svg, video, canvas, iframe, table, pre, code');
+    for (var fixedIndex = 0; fixedIndex < fixedNodes.length; fixedIndex += 1) {
+      fixedNodes[fixedIndex].style.setProperty('max-width', '100%', 'important');
+      fixedNodes[fixedIndex].style.setProperty('min-width', '0', 'important');
+      fixedNodes[fixedIndex].style.setProperty('box-sizing', 'border-box', 'important');
+      fixedNodes[fixedIndex].style.setProperty('margin-left', '0', 'important');
+      fixedNodes[fixedIndex].style.setProperty('margin-right', '0', 'important');
+      if (fixedNodes[fixedIndex].tagName === 'TABLE') {
+        fixedNodes[fixedIndex].style.setProperty('width', '100%', 'important');
+      }
+    }
+  }
+
+  function applyReaderStylesToRenderedChapters() {
+    applyViewportWidth();
+    var sections = content ? content.querySelectorAll('.chapter') : [];
+    for (var index = 0; index < sections.length; index += 1) {
+      applyReaderStylesToSection(sections[index]);
+    }
+    requestAnimationFrame(clampHorizontalOverflow);
+  }
+
+  function clampHorizontalOverflow() {
+    var viewport = viewportWidth();
+    var sections = content ? content.querySelectorAll('.chapter') : [];
+    for (var sectionIndex = 0; sectionIndex < sections.length; sectionIndex += 1) {
+      var section = sections[sectionIndex];
+      var sectionStyle = window.getComputedStyle(section);
+      var horizontalPadding =
+        (parseFloat(sectionStyle.paddingLeft) || 0) + (parseFloat(sectionStyle.paddingRight) || 0);
+      var available = Math.max(1, Math.floor(viewport - horizontalPadding));
+      var nodes = section.querySelectorAll('*');
+      for (var nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
+        var node = nodes[nodeIndex];
+        if (!node || !node.style) continue;
+        node.style.setProperty('max-width', available + 'px', 'important');
+        node.style.setProperty('min-width', '0', 'important');
+        node.style.setProperty('box-sizing', 'border-box', 'important');
+        node.style.setProperty('margin-left', '0', 'important');
+        node.style.setProperty('margin-right', '0', 'important');
+        if ((node.scrollWidth || 0) > available || (node.offsetWidth || 0) > available) {
+          var tag = String(node.tagName || '').toLowerCase();
+          node.style.setProperty('width', tag === 'table' ? '100%' : available + 'px', 'important');
+          node.style.setProperty('overflow-x', 'hidden', 'important');
+          if (tag === 'pre' || tag === 'code') {
+            node.style.setProperty('white-space', 'pre-wrap', 'important');
+          }
+        }
+      }
+    }
+    if (document.scrollingElement) document.scrollingElement.scrollLeft = 0;
+    if (window.scrollX) window.scrollTo(0, window.scrollY || 0);
   }
 
   function cachedHeight(index) {
@@ -300,6 +421,7 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   }
 
   function measureRendered() {
+    clampHorizontalOverflow();
     var sections = Array.prototype.slice.call(content.querySelectorAll('.chapter'));
     var total = 0;
     var count = 0;
@@ -645,6 +767,7 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     style.setProperty('--reader-padding', vars.padding);
     document.body.style.background = vars.background;
     document.body.style.color = vars.foreground;
+    applyReaderStylesToRenderedChapters();
     restoreAnchor(anchor);
   }
 
@@ -732,11 +855,16 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     }
   }, true);
   window.addEventListener('scroll', function () {
+    if (window.scrollX) window.scrollTo(0, window.scrollY || 0);
     maybeLoadMore();
     sendProgress();
   }, { passive: true });
+  window.addEventListener('resize', function () {
+    applyReaderStylesToRenderedChapters();
+  });
 
   window.PointReader = { jumpTo: jumpTo, jumpToOffset: jumpToOffset, jumpToHref: jumpToHref, applySettings: applySettings, resume: resume };
+  applyViewportWidth();
   renderRange(start, end);
   requestAnimationFrame(function () {
     jumpToOffset(${safeInitialIndex}, ${safeInitialOffset}, true);

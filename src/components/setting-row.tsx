@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Switch, Text, View } from 'react-native';
+import { Platform, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { Colors, Radius, Spacing } from '@/constants/theme';
 import type { AppColors } from '@/lib/theme';
@@ -26,6 +26,7 @@ export function SettingRow({ title, description, value, onValueChange, colors = 
         trackColor={{ false: colors.backgroundElement, true: colors.text }}
         thumbColor={colors.surface}
         ios_backgroundColor={colors.backgroundElement}
+        style={styles.switch}
       />
     </View>
   );
@@ -56,5 +57,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     color: Colors.light.textSecondary,
+  },
+  switch: {
+    transform: Platform.OS === 'android' ? [{ scaleX: 1.16 }, { scaleY: 1.16 }] : undefined,
   },
 });
