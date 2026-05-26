@@ -15,6 +15,8 @@ import {
   ActivityIndicator,
   AppState,
   FlatList,
+  NativeModules,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -55,6 +57,9 @@ const TEXT_BLOCK_INCREMENT = 12;
 const STYLE_PROGRESS_GUARD_MS = 2500;
 const PROGRESS_SAVE_DEBOUNCE_MS = 100;
 const BATTERY_REFRESH_INTERVAL_MS = 30000;
+const APP_RESUME_PROGRESS_GUARD_MS = 2600;
+const EPUB_REBUILD_TARGET_GUARD_MS = 5000;
+const PROGRESS_BACKWARD_TOLERANCE = 0.0002;
 const READER_TOOLBAR_HEIGHT = 68;
 const ACTIVE_TOOL_COLOR = '#3478F6';
 const BATTERY_BODY_WIDTH = 26;
@@ -62,6 +67,12 @@ const BATTERY_BODY_HEIGHT = 14;
 const TAP_ZONE_EDGE_RATIO = 0.35;
 
 type TapZoneAction = 'previous' | 'toolbar' | 'next';
+
+type PointReaderScrollControlModule = {
+  setScrollsToTopEnabled?: (enabled: boolean) => void;
+};
+
+const pointReaderScrollControl = NativeModules.PointReaderScrollControl as PointReaderScrollControlModule | undefined;
 
 type TextBlock = {
   id: string;
@@ -81,6 +92,12 @@ type PendingProgress = {
 type RestoreProgressGuard = {
   bookId: string;
   progress: number;
+  until: number;
+};
+
+type EpubRebuildTargetGuard = {
+  index: number;
+  href?: string;
   until: number;
 };
 
@@ -110,7 +127,7 @@ export default function ReaderScreen() {
   const [battery, setBattery] = useState<number | null>(null);
   const [epubToc, setEpubToc] = useState<ReaderChapter[]>([]);
   const [epubHtmlBook, setEpubHtmlBook] = useState<EpubHtmlBook | null>(null);
-  const [epubJumpRequest, setEpubJumpRequest] = useState<{ index: number; nonce: number } | null>(null);
+  const [epubJumpRequest, setEpubJumpRequest] = useState<{ index: number; href?: string; nonce: number } | null>(null);
   const [epubSeekRequest, setEpubSeekRequest] = useState<EpubSeekRequest | null>(null);
   const [epubPagedSeekRequest, setEpubPagedSeekRequest] = useState<EpubPagedSeekRequest | null>(null);
   const [epubResumeRequest, setEpubResumeRequest] = useState<EpubResumeRequest | null>(null);
@@ -131,14 +148,38 @@ export default function ReaderScreen() {
   const pendingProgress = useRef<PendingProgress | null>(null);
   const bookRef = useRef<Book | null>(null);
   const settingsRef = useRef<ReadingSettings>(defaultReadingSettings);
+  const displayProgressRef = useRef(0);
   const mountedRef = useRef(true);
   const appStateRef = useRef(AppState.currentState);
   const restoreProgressGuard = useRef<RestoreProgressGuard | null>(null);
+  const epubRebuildTargetGuard = useRef<EpubRebuildTargetGuard | null>(null);
   const lastToolbarToggleAt = useRef(0);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'ios') return undefined;
+      setIosScrollsToTopEnabled(false);
+      const refreshTimer = setTimeout(() => setIosScrollsToTopEnabled(false), 500);
+      return () => {
+        clearTimeout(refreshTimer);
+        setIosScrollsToTopEnabled(true);
+      };
+    }, [])
+  );
+
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    const refreshTimer = setTimeout(() => setIosScrollsToTopEnabled(false), 80);
+    return () => clearTimeout(refreshTimer);
+  }, [book?.format, epubHtmlBook, epubReaderKey, settings.mode]);
 
   useEffect(() => {
     bookRef.current = book;
   }, [book]);
+
+  useEffect(() => {
+    displayProgressRef.current = displayProgress;
+  }, [displayProgress]);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -176,6 +217,7 @@ export default function ReaderScreen() {
           setEpubResumeRequest(null);
           setEpubPagedResumeRequest(null);
           setEpubPagedTurnRequest(null);
+          epubRebuildTargetGuard.current = null;
           setPdfTurnRequest(null);
           setTextTurnRequest(null);
           if (nextBook?.format === 'txt') {
@@ -198,11 +240,10 @@ export default function ReaderScreen() {
             setChapters([]);
             setTextWindowStart(0);
             setTextScrollRequest(null);
-            setEpubToc(
-              nextEpub.chapters
-                .map((chapter) => ({ id: chapter.id, href: chapter.href, title: chapter.title.trim(), text: '' }))
-                .filter((chapter) => chapter.title.length > 0)
-            );
+            const tocItems = nextEpub.toc.length
+              ? nextEpub.toc
+              : nextEpub.chapters.map((chapter) => ({ id: chapter.id, href: chapter.href, title: chapter.title.trim() }));
+            setEpubToc(tocItems.map((chapter) => ({ id: chapter.id, href: chapter.href, title: chapter.title.trim(), text: '' })).filter((chapter) => chapter.title.length > 0));
             const { index: restoredIndex, offset: restoredOffset } = resolveEpubRestorePosition(nextBook, nextEpub);
             const restoredBook = { ...nextBook, currentChapter: restoredIndex, currentOffset: restoredOffset };
             setBook(restoredBook);
@@ -331,6 +372,18 @@ export default function ReaderScreen() {
     setEpubReaderKey((key) => key + 1);
   }, [flushProgressSave]);
 
+  const guardCurrentProgress = useCallback((duration = APP_RESUME_PROGRESS_GUARD_MS) => {
+    const currentBook = bookRef.current;
+    if (!currentBook || currentBook.format !== 'epub') return;
+    const progress = Math.max(displayProgressRef.current, currentBook.progress);
+    if (progress <= 0.005) return;
+    restoreProgressGuard.current = {
+      bookId: currentBook.id,
+      progress,
+      until: Date.now() + duration,
+    };
+  }, []);
+
   useEffect(() => {
     return () => {
       mountedRef.current = false;
@@ -353,6 +406,7 @@ export default function ReaderScreen() {
       appStateRef.current = nextState;
 
       if (nextState !== 'active') {
+        guardCurrentProgress(APP_RESUME_PROGRESS_GUARD_MS + 1200);
         void flushProgressSave();
         return;
       }
@@ -360,12 +414,13 @@ export default function ReaderScreen() {
       if (previousState === 'active') return;
       const currentBook = bookRef.current;
       if (currentBook?.format !== 'epub') return;
+      guardCurrentProgress();
       const nonce = Date.now();
       setEpubResumeRequest({ nonce });
       setEpubPagedResumeRequest({ nonce });
     });
     return () => subscription.remove();
-  }, [flushProgressSave]);
+  }, [flushProgressSave, guardCurrentProgress]);
 
   const scheduleProgressSave = useCallback(
     (progress: number, chapter: number, offset: number, location?: string | null) => {
@@ -376,11 +431,13 @@ export default function ReaderScreen() {
         currentBook &&
         guard?.bookId === currentBook.id &&
         Date.now() < guard.until &&
-        nextProgress + 0.005 < guard.progress
+        nextProgress + PROGRESS_BACKWARD_TOLERANCE < guard.progress
       ) {
-        return;
+        return false;
       }
-      restoreProgressGuard.current = null;
+      if (!guard || nextProgress + PROGRESS_BACKWARD_TOLERANCE >= guard.progress) {
+        restoreProgressGuard.current = null;
+      }
       setDisplayProgress(nextProgress);
       setCurrentChapterIndex(chapter);
       pendingProgress.current = {
@@ -389,11 +446,12 @@ export default function ReaderScreen() {
         offset,
         location,
       };
-      if (!currentBook) return;
+      if (!currentBook) return true;
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
         void flushProgressSave();
       }, PROGRESS_SAVE_DEBOUNCE_MS);
+      return true;
     },
     [flushProgressSave]
   );
@@ -437,6 +495,7 @@ export default function ReaderScreen() {
       until: Date.now() + STYLE_PROGRESS_GUARD_MS,
     };
   }, [displayProgress]);
+
   const seekToProgress = useCallback(
     (progress: number) => {
       const nextProgress = clamp(progress, 0, 1);
@@ -448,6 +507,7 @@ export default function ReaderScreen() {
         const index = Math.min(epubHtmlBook.chapters.length - 1, Math.max(0, Math.floor(absolute)));
         const offset = index === epubHtmlBook.chapters.length - 1 && nextProgress >= 0.999 ? 1 : clamp(absolute - index, 0, 1);
         const href = epubHtmlBook.chapters[index]?.href ?? '';
+        restoreProgressGuard.current = null;
         setCurrentChapterIndex(index);
         setCurrentEpubHref(href);
         setEpubChapterTitle(epubHtmlBook.chapters[index]?.title ?? '');
@@ -499,6 +559,30 @@ export default function ReaderScreen() {
     });
     return () => subscription.remove();
   }, [settings.mode, settings.volumeTurnPage, turnReaderPage]);
+
+  const handleEpubProgress = useCallback(
+    (progress: number, chapterIndex: number, href: string, chapterOffset: number) => {
+      const rebuildGuard = epubRebuildTargetGuard.current;
+      if (rebuildGuard) {
+        if (Date.now() >= rebuildGuard.until) {
+          epubRebuildTargetGuard.current = null;
+        } else {
+          const reachedTarget = chapterIndex === rebuildGuard.index || isSameEpubHref(href, rebuildGuard.href);
+          if (!reachedTarget) return;
+          epubRebuildTargetGuard.current = null;
+        }
+      }
+
+      const accepted = scheduleProgressSave(progress, chapterIndex, chapterOffset, createEpubScrollLocation(chapterIndex, chapterOffset, href));
+      if (!accepted) return;
+      const chapter = epubHtmlBook?.chapters[chapterIndex];
+      setCurrentEpubHref(href);
+      if (chapter?.title) {
+        setEpubChapterTitle((current) => (current === chapter.title ? current : chapter.title));
+      }
+    },
+    [epubHtmlBook, scheduleProgressSave]
+  );
 
   const closeReader = useCallback(async () => {
     await flushProgressSave();
@@ -576,15 +660,7 @@ export default function ReaderScreen() {
               onToggleToolbar={toggleToolbar}
               onImagePress={openImagePreview}
               onRecoverRequired={rebuildEpubReader}
-              onProgress={(progress, chapterIndex, href, chapterOffset) => {
-                const chapter = epubHtmlBook.chapters[chapterIndex];
-                setCurrentChapterIndex(chapterIndex);
-                setCurrentEpubHref(href);
-                if (chapter?.title) {
-                  setEpubChapterTitle((current) => (current === chapter.title ? current : chapter.title));
-                }
-                scheduleProgressSave(progress, chapterIndex, chapterOffset, createEpubScrollLocation(chapterIndex, chapterOffset, href));
-              }}
+              onProgress={handleEpubProgress}
             />
           ) : (
             <View style={styles.centeredLoader}>
@@ -608,15 +684,7 @@ export default function ReaderScreen() {
               onTap={handlePagedEpubTap}
               onImagePress={openImagePreview}
               onRecoverRequired={rebuildEpubReader}
-              onProgress={(progress, chapterIndex, href, chapterOffset) => {
-                const chapter = epubHtmlBook.chapters[chapterIndex];
-                setCurrentChapterIndex(chapterIndex);
-                setCurrentEpubHref(href);
-                if (chapter?.title) {
-                  setEpubChapterTitle((current) => (current === chapter.title ? current : chapter.title));
-                }
-                scheduleProgressSave(progress, chapterIndex, chapterOffset, createEpubScrollLocation(chapterIndex, chapterOffset, href));
-              }}
+              onProgress={handleEpubProgress}
             />
           ) : (
             <View style={styles.centeredLoader}>
@@ -702,14 +770,38 @@ export default function ReaderScreen() {
           onSelectChapter={(index, href) => {
             setCurrentChapterIndex(index);
             if (book.format === 'epub' && href) {
-              const estimatedProgress = epubToc.length > 1 ? index / epubToc.length : 0;
-              const title = epubToc[index]?.title;
+              const chapterCount = epubHtmlBook?.chapters.length ?? epubToc.length;
+              const estimatedProgress = epubPositionProgress(index, 0, chapterCount);
+              const title = epubToc.find((chapter) => isSameEpubHref(chapter.href, href))?.title ?? epubToc[index]?.title;
+              const location = createEpubScrollLocation(index, 0, href);
+              const nextBook = {
+                ...book,
+                progress: estimatedProgress,
+                currentChapter: index,
+                currentOffset: 0,
+                currentLocation: location,
+              };
+              restoreProgressGuard.current = null;
+              epubRebuildTargetGuard.current = {
+                index,
+                href,
+                until: Date.now() + EPUB_REBUILD_TARGET_GUARD_MS,
+              };
+              bookRef.current = nextBook;
+              setBook(nextBook);
+              setDisplayProgress(estimatedProgress);
               setCurrentEpubHref(href);
               if (title) {
                 setEpubChapterTitle(title);
               }
-              scheduleProgressSave(estimatedProgress, index, 0, createEpubScrollLocation(index, 0, href));
-              setEpubJumpRequest({ index, nonce: Date.now() });
+              scheduleProgressSave(estimatedProgress, index, 0, location);
+              setEpubJumpRequest(null);
+              setEpubSeekRequest(null);
+              setEpubPagedSeekRequest(null);
+              setEpubResumeRequest(null);
+              setEpubPagedResumeRequest(null);
+              setEpubPagedTurnRequest(null);
+              setEpubReaderKey((key) => key + 1);
             } else {
               const targetBlock = textBlocks.find((block) => block.chapterIndex === index);
               const nextOffset = targetBlock?.blockIndex ?? 0;
@@ -903,6 +995,7 @@ function TextScrollPane({
       data={blocks}
       keyExtractor={(item) => item.id}
       renderItem={renderItem}
+      scrollsToTop={false}
       showsVerticalScrollIndicator={!settings.hideScrollbar}
       initialNumToRender={8}
       maxToRenderPerBatch={6}
@@ -1064,6 +1157,10 @@ function tapZoneAction(x: number, width: number, swapTapZones: boolean): TapZone
   return 'toolbar';
 }
 
+function setIosScrollsToTopEnabled(enabled: boolean) {
+  pointReaderScrollControl?.setScrollsToTopEnabled?.(enabled);
+}
+
 function normalizeEpubHref(href?: string | null) {
   if (!href) return '';
   return href.split('#')[0].replace(/^.*\/([^/]+)$/, '$1');
@@ -1174,6 +1271,7 @@ function TapTextPane({
   return (
     <View style={styles.tapPane}>
       <ScrollView
+        scrollsToTop={false}
         contentContainerStyle={[styles.textContent, { paddingHorizontal: 18 + settings.paddingScale * 18 }]}
         onTouchStart={(event) => {
           isDragging.current = false;

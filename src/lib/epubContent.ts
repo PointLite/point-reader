@@ -10,8 +10,15 @@ export type EpubHtmlChapter = {
   html: string;
 };
 
+export type EpubTocItem = {
+  id: string;
+  title: string;
+  href: string;
+};
+
 export type EpubHtmlBook = {
   chapters: EpubHtmlChapter[];
+  toc: EpubTocItem[];
   css: string;
 };
 
@@ -25,7 +32,7 @@ export async function loadEpubHtmlBook(fileUri: string): Promise<EpubHtmlBook> {
   const zip = unzipSync(bytes);
   const container = readZipText(zip, 'META-INF/container.xml');
   const rootfile = findRootfilePath(container);
-  if (!rootfile) return { chapters: [], css: '' };
+  if (!rootfile) return { chapters: [], toc: [], css: '' };
 
   const opf = readZipText(zip, rootfile);
   const opfDir = rootfile.includes('/') ? rootfile.slice(0, rootfile.lastIndexOf('/') + 1) : '';
@@ -60,7 +67,15 @@ export async function loadEpubHtmlBook(fileUri: string): Promise<EpubHtmlBook> {
     })
     .filter((chapter): chapter is EpubHtmlChapter => Boolean(chapter));
 
-  return { chapters, css };
+  const tocItems = toc
+    .map((item, index) => ({
+      id: `${item.href || index}-${index}`,
+      title: item.title.trim(),
+      href: item.href,
+    }))
+    .filter((item) => item.title.length > 0 && item.href.length > 0);
+
+  return { chapters, toc: tocItems, css };
 }
 
 function readToc(zip: Record<string, Uint8Array>, opfDir: string, manifestItems: any[], tocId?: string) {

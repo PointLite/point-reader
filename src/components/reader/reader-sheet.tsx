@@ -98,7 +98,7 @@ export function ReaderSheet({
       </View>
       {sheet === 'toc' ? (
         hasChapters ? (
-          <ScrollView ref={tocListRef} style={styles.tocList}>
+          <ScrollView ref={tocListRef} scrollsToTop={false} style={styles.tocList}>
             {chapters.map((chapter, index) => {
             const isCurrent = currentChapterHref
               ? isSameEpubHref(chapter.href, currentChapterHref)

@@ -15,7 +15,7 @@ export type EpubResumeRequest = {
   nonce: number;
 };
 
-type EpubScrollCommand = 'jumpTo' | 'jumpToOffset' | 'applySettings' | 'resume';
+type EpubScrollCommand = 'jumpTo' | 'jumpToHref' | 'jumpToOffset' | 'applySettings' | 'resume';
 
 type EpubScrollWebViewMessage =
   | { type: 'tap' }
@@ -44,7 +44,7 @@ export function EpubScrollPane({
   initialIndex: number;
   initialOffset: number;
   initialProgress: number;
-  jumpRequest: { index: number; nonce: number } | null;
+  jumpRequest: { index: number; href?: string; nonce: number } | null;
   seekRequest: EpubSeekRequest | null;
   resumeRequest: EpubResumeRequest | null;
   onProgress: (progress: number, chapterIndex: number, href: string, chapterOffset: number) => void;
@@ -74,6 +74,10 @@ export function EpubScrollPane({
 
   useEffect(() => {
     if (!jumpRequest) return;
+    if (jumpRequest.href) {
+      injectEpubScrollCommand(webViewRef, 'jumpToHref', [jumpRequest.href, jumpRequest.index]);
+      return;
+    }
     injectEpubScrollCommand(webViewRef, 'jumpTo', [jumpRequest.index]);
   }, [jumpRequest]);
 
@@ -264,6 +268,7 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: pan
   var restoreLayoutUntil = restoreTargetProgress > 0.015 ? Date.now() + 2600 : 0;
   var restoreFinalized = false;
   var readySent = false;
+  var jumpToken = 0;
   var touchStart = { x: 0, y: 0 };
   var moved = false;
 
@@ -564,19 +569,51 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: pan
     updateSpacers();
   }
 
-  function jumpTo(index) {
-    index = Math.max(0, Math.min(Number(index) || 0, chapters.length - 1));
+  function beginJump() {
+    jumpToken += 1;
+    restoreFinalized = true;
+    restoreTargetProgress = 0;
     restoreLockUntil = 0;
     restoreLayoutUntil = 0;
-    suppressProgressUntil = Date.now() + 700;
+    suppressProgressUntil = Date.now() + 5000;
+    return jumpToken;
+  }
+
+  function finishJump(token) {
+    if (token !== jumpToken) return;
+    suppressProgressUntil = 0;
+    measureRendered();
+    resetSpacerHeights();
+    sendProgress(true);
+    maybeLoadMore();
+  }
+
+  function scrollElementToTop(target, section) {
+    if (!target && !section) return;
+    var element = target || section;
+    var rect = element.getBoundingClientRect ? element.getBoundingClientRect() : null;
+    var y = rect ? rect.top + (window.scrollY || 0) : (element.offsetTop || (section && section.offsetTop) || 0);
+    window.scrollTo(0, Math.max(0, Math.round(y)));
+  }
+
+  function scrollChapterToOffset(index, offset) {
+    var element = document.getElementById('chapter-' + index);
+    if (!element) return;
+    var scrollableHeight = Math.max(1, element.offsetHeight - (window.innerHeight || 0));
+    window.scrollTo(0, element.offsetTop + scrollableHeight * Math.max(0, Math.min(1, Number(offset) || 0)));
+  }
+
+  function jumpTo(index) {
+    index = Math.max(0, Math.min(Number(index) || 0, chapters.length - 1));
+    var token = beginJump();
     renderRange(Math.max(0, index - 3), Math.min(chapters.length, index + 5));
-    requestAnimationFrame(function () {
-      var element = document.getElementById('chapter-' + index);
-      if (element) element.scrollIntoView({ block: 'start' });
-      setTimeout(function () {
-        suppressProgressUntil = 0;
-        sendProgress(true);
-      }, 120);
+    waitForJumpLayout(index, null, token, function (section) {
+      if (token !== jumpToken) return;
+      scrollElementToTop(section, section);
+      requestAnimationFrame(function () {
+        scrollElementToTop(section, section);
+        finishJump(token);
+      });
     });
   }
 
@@ -628,28 +665,28 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: pan
     return null;
   }
 
-  function jumpToHref(rawHref, sourceElement) {
+  function jumpToHref(rawHref, fallbackIndexOrSource, maybeSourceElement) {
     var href = String(rawHref || '');
     if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
-    restoreLockUntil = 0;
-    restoreLayoutUntil = 0;
-    suppressProgressUntil = Date.now() + 700;
+    var sourceElement = maybeSourceElement || (fallbackIndexOrSource && fallbackIndexOrSource.closest ? fallbackIndexOrSource : null);
     var sourceSection = sourceElement && sourceElement.closest ? sourceElement.closest('.chapter') : currentChapter();
-    var fallbackIndex = sourceSection ? Number(sourceSection.getAttribute('data-index')) || 0 : start;
+    var fallbackIndex =
+      typeof fallbackIndexOrSource === 'number'
+        ? fallbackIndexOrSource
+        : sourceSection
+          ? Number(sourceSection.getAttribute('data-index')) || 0
+          : start;
     var targetIndex = findChapterByHref(href, fallbackIndex);
     var fragment = href.indexOf('#') >= 0 ? href.slice(href.indexOf('#') + 1) : '';
+    var token = beginJump();
     renderRange(Math.max(0, targetIndex - 3), Math.min(chapters.length, targetIndex + 5));
-    requestAnimationFrame(function () {
-      var section = document.getElementById('chapter-' + targetIndex);
-      var target = findAnchorTarget(section, fragment) || section;
-      if (target) {
-        var rect = target.getBoundingClientRect ? target.getBoundingClientRect() : null;
-        window.scrollTo(0, rect ? rect.top + (window.scrollY || 0) : target.offsetTop || section.offsetTop || 0);
-      }
-      setTimeout(function () {
-        suppressProgressUntil = 0;
-        sendProgress(true);
-      }, 120);
+    waitForJumpLayout(targetIndex, fragment, token, function (section, target) {
+      if (token !== jumpToken) return;
+      scrollElementToTop(target || section, section);
+      requestAnimationFrame(function () {
+        scrollElementToTop(target || section, section);
+        finishJump(token);
+      });
     });
     return true;
   }
@@ -657,6 +694,7 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: pan
   function jumpToOffset(index, offset, keepRestoreLock, done) {
     index = Math.max(0, Math.min(Number(index) || 0, chapters.length - 1));
     offset = Math.max(0, Math.min(1, Number(offset) || 0));
+    var token = jumpToken;
     if (!keepRestoreLock) {
       restoreLockUntil = 0;
       restoreLayoutUntil = 0;
@@ -664,6 +702,7 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: pan
     suppressProgressUntil = Date.now() + 1200;
     renderRange(Math.max(0, index - 3), Math.min(chapters.length, index + 5));
     function applyScroll() {
+      if (token !== jumpToken) return;
       var element = document.getElementById('chapter-' + index);
       if (element) {
         var scrollableHeight = Math.max(1, element.offsetHeight - (window.innerHeight || 0));
@@ -674,12 +713,83 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: pan
       applyScroll();
       setTimeout(applyScroll, 120);
       setTimeout(function () {
+        if (token !== jumpToken) return;
         applyScroll();
         suppressProgressUntil = 0;
         sendProgress(true);
         if (typeof done === 'function') done();
       }, 320);
     });
+  }
+
+  function waitForJumpLayout(index, fragment, token, callback) {
+    var element = document.getElementById('chapter-' + index);
+    if (!element) {
+      callback(null, null);
+      return;
+    }
+    var renderedSections = Array.prototype.slice.call(content.querySelectorAll('.chapter'));
+    var sectionsBeforeTarget = renderedSections.filter(function (section) {
+      return (Number(section.getAttribute('data-index')) || 0) <= index;
+    });
+    var pendingImages = [];
+    sectionsBeforeTarget.forEach(function (section) {
+      pendingImages = pendingImages.concat(Array.prototype.slice.call(section.querySelectorAll('img')).filter(function (image) {
+        return !image.complete;
+      }));
+    });
+    pendingImages = pendingImages.filter(function (image, imageIndex) {
+      return pendingImages.indexOf(image) === imageIndex;
+    });
+    var pending = pendingImages.length + 1;
+    var done = false;
+    var lastSignature = '';
+    var stableFrames = 0;
+
+    function release() {
+      pending -= 1;
+      if (pending <= 0) waitForStableLayout();
+    }
+
+    function layoutSignature() {
+      measureRendered();
+      resetSpacerHeights();
+      var target = findAnchorTarget(element, fragment) || element;
+      var targetTop = target && target.getBoundingClientRect ? target.getBoundingClientRect().top + (window.scrollY || 0) : 0;
+      return [
+        Math.round(topSpacer.offsetHeight || 0),
+        Math.round(content.offsetHeight || 0),
+        Math.round(element.offsetTop || 0),
+        Math.round(targetTop || 0),
+      ].join(':');
+    }
+
+    function waitForStableLayout() {
+      if (done || token !== jumpToken) return;
+      requestAnimationFrame(function () {
+        var nextSignature = layoutSignature();
+        if (nextSignature === lastSignature) stableFrames += 1;
+        else stableFrames = 0;
+        lastSignature = nextSignature;
+        if (stableFrames >= 3) {
+          done = true;
+          callback(element, findAnchorTarget(element, fragment) || element);
+          return;
+        }
+        waitForStableLayout();
+      });
+    }
+
+    pendingImages.forEach(function (image) {
+      image.addEventListener('load', release, { once: true });
+      image.addEventListener('error', release, { once: true });
+    });
+
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(release).catch(release);
+    } else {
+      release();
+    }
   }
 
   function waitForChapterLayout(index, callback) {
@@ -734,11 +844,18 @@ body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: pan
       markReady();
       return;
     }
-    waitForChapterLayout(restoreTargetIndex, function () {
+    var token = jumpToken;
+    waitForJumpLayout(restoreTargetIndex, null, token, function () {
       if (restoreFinalized) return;
       restoreFinalized = true;
       restoreLayoutUntil = 0;
-      jumpToOffset(restoreTargetIndex, restoreTargetOffset, false, markReady);
+      scrollChapterToOffset(restoreTargetIndex, restoreTargetOffset);
+      requestAnimationFrame(function () {
+        scrollChapterToOffset(restoreTargetIndex, restoreTargetOffset);
+        suppressProgressUntil = 0;
+        sendProgress(true);
+        markReady();
+      });
     });
   }
 

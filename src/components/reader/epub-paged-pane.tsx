@@ -15,7 +15,7 @@ export type EpubPagedResumeRequest = {
   nonce: number;
 };
 
-type EpubPagedCommand = 'go' | 'jumpTo' | 'jumpToOffset' | 'seekToProgress' | 'applySettings' | 'resume';
+type EpubPagedCommand = 'go' | 'jumpTo' | 'jumpToHref' | 'jumpToOffset' | 'seekToProgress' | 'applySettings' | 'resume';
 
 type EpubPagedMessage =
   | { type: 'tap'; x?: unknown; width?: unknown }
@@ -45,7 +45,7 @@ export function EpubPagedPane({
   initialIndex: number;
   initialOffset: number;
   initialProgress: number;
-  jumpRequest: { index: number; nonce: number } | null;
+  jumpRequest: { index: number; href?: string; nonce: number } | null;
   seekRequest: EpubPagedSeekRequest | null;
   resumeRequest: EpubPagedResumeRequest | null;
   turnRequest: { delta: -1 | 1; nonce: number } | null;
@@ -76,6 +76,10 @@ export function EpubPagedPane({
 
   useEffect(() => {
     if (!jumpRequest) return;
+    if (jumpRequest.href) {
+      injectEpubPagedCommand(webViewRef, 'jumpToHref', [jumpRequest.href, jumpRequest.index]);
+      return;
+    }
     injectEpubPagedCommand(webViewRef, 'jumpTo', [jumpRequest.index]);
   }, [jumpRequest]);
 
@@ -489,11 +493,17 @@ body { position: fixed; inset: 0; touch-action: pan-y; }
     return fallbackIndex;
   }
 
-  function jumpToHref(rawHref, sourceElement) {
+  function jumpToHref(rawHref, fallbackIndexOrSource, maybeSourceElement) {
     var href = String(rawHref || '');
     if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
+    var sourceElement = maybeSourceElement || (fallbackIndexOrSource && fallbackIndexOrSource.closest ? fallbackIndexOrSource : null);
     var sourceSection = sourceElement && sourceElement.closest ? sourceElement.closest('.chapter') : null;
-    var fallbackIndex = sourceSection ? Number(sourceSection.getAttribute('data-index')) || 0 : 0;
+    var fallbackIndex =
+      typeof fallbackIndexOrSource === 'number'
+        ? fallbackIndexOrSource
+        : sourceSection
+          ? Number(sourceSection.getAttribute('data-index')) || 0
+          : 0;
     var targetIndex = findChapterByHref(href, fallbackIndex);
     jumpTo(targetIndex);
     return true;
@@ -577,7 +587,7 @@ body { position: fixed; inset: 0; touch-action: pan-y; }
     applyPage(true);
   });
 
-  window.PointReader = { go: go, jumpTo: jumpTo, jumpToOffset: jumpToOffset, seekToProgress: seekToProgress, applySettings: applySettings, resume: resume };
+  window.PointReader = { go: go, jumpTo: jumpTo, jumpToHref: jumpToHref, jumpToOffset: jumpToOffset, seekToProgress: seekToProgress, applySettings: applySettings, resume: resume };
   renderAll();
   requestAnimationFrame(function () {
     measure();

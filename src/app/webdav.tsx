@@ -387,70 +387,76 @@ export default function WebDavScreen() {
       </View>
 
       {browseState ? (
-        <FlatList
-          data={sortedEntries}
-          keyExtractor={(item) => item.href}
-          contentContainerStyle={styles.content}
-          ListHeaderComponent={
-            <View style={styles.browserHeader}>
-              <View style={styles.browserTitleRow}>
-                <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('directoryContents')}</Text>
-                <View ref={sortButtonRef}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={t('sort')}
-                    disabled={loading}
-                    onPress={openSortMenu}
-                    style={({ pressed }) => [
-                      styles.sortHeaderButton,
-                      { borderColor: colors.border, backgroundColor: colors.surface },
-                      loading && styles.disabledControl,
-                      pressed && styles.pressed,
-                    ]}>
-                    <SlidersHorizontal size={20} color={colors.text} />
-                  </Pressable>
-                </View>
+        <View style={styles.listSection}>
+          <View style={styles.fixedSectionHeader}>
+            <View style={styles.browserTitleRow}>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('directoryContents')}</Text>
+              <View ref={sortButtonRef}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t('sort')}
+                  disabled={loading}
+                  onPress={openSortMenu}
+                  style={({ pressed }) => [
+                    styles.sortHeaderButton,
+                    { borderColor: colors.border, backgroundColor: colors.surface },
+                    loading && styles.disabledControl,
+                    pressed && styles.pressed,
+                  ]}>
+                  <SlidersHorizontal size={20} color={colors.text} />
+                </Pressable>
               </View>
-              <Text style={[styles.browserMeta, { color: colors.textSecondary }]}>
-                {t('selectedItems', { count: selectedEntries.length })}
-                {importing ? t('importingProgress', { completed: webDavImport.completed, total: webDavImport.total }) : ''}
-              </Text>
             </View>
-          }
-          ListEmptyComponent={
-            <EmptyState colors={colors} loading={loading} text={loading ? t('readingDirectory') : t('emptyDirectory')} />
-          }
-          renderItem={({ item }) => (
-            <WebDavEntryRow
-              entry={item}
-              colors={colors}
-              selected={selectedHrefSet.has(item.href)}
-              disabled={importing || loading}
-              onToggle={() => toggleSelected(item.href)}
-              onPress={() => openEntry(item)}
-            />
-          )}
-        />
+            <Text style={[styles.browserMeta, { color: colors.textSecondary }]}>
+              {t('selectedItems', { count: selectedEntries.length })}
+              {importing ? t('importingProgress', { completed: webDavImport.completed, total: webDavImport.total }) : ''}
+            </Text>
+          </View>
+          <FlatList
+            data={sortedEntries}
+            keyExtractor={(item) => item.href}
+            style={styles.scrollList}
+            contentContainerStyle={styles.listContent}
+            ListEmptyComponent={
+              <EmptyState colors={colors} loading={loading} text={loading ? t('readingDirectory') : t('emptyDirectory')} />
+            }
+            renderItem={({ item }) => (
+              <WebDavEntryRow
+                entry={item}
+                colors={colors}
+                selected={selectedHrefSet.has(item.href)}
+                disabled={importing || loading}
+                onToggle={() => toggleSelected(item.href)}
+                onPress={() => openEntry(item)}
+              />
+            )}
+          />
+        </View>
       ) : (
-        <FlatList
-          data={directories}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.content}
-          ListHeaderComponent={<Text style={[styles.sectionTitle, { color: colors.text }]}>{t('myDirectories')}</Text>}
-          ListEmptyComponent={
-            <EmptyState colors={colors} loading={false} text={t('emptyDirectories')} />
-          }
-          renderItem={({ item }) => (
-            <DirectoryCard
-              directory={item}
-              colors={colors}
-              disabled={loading || importing}
-              onPress={() => openDirectory(item)}
-              onEdit={() => openEditDirectory(item)}
-              onDelete={() => deleteDirectory(item)}
-            />
-          )}
-        />
+        <View style={styles.listSection}>
+          <View style={styles.fixedSectionHeader}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('myDirectories')}</Text>
+          </View>
+          <FlatList
+            data={directories}
+            keyExtractor={(item) => item.id}
+            style={styles.scrollList}
+            contentContainerStyle={styles.listContent}
+            ListEmptyComponent={
+              <EmptyState colors={colors} loading={false} text={t('emptyDirectories')} />
+            }
+            renderItem={({ item }) => (
+              <DirectoryCard
+                directory={item}
+                colors={colors}
+                disabled={loading || importing}
+                onPress={() => openDirectory(item)}
+                onEdit={() => openEditDirectory(item)}
+                onDelete={() => deleteDirectory(item)}
+              />
+            )}
+          />
+        </View>
       )}
 
       {loading ? <DirectoryLoadingOverlay colors={colors} /> : null}
@@ -1151,17 +1157,29 @@ const styles = StyleSheet.create({
     marginVertical: Spacing.one,
     backgroundColor: Colors.light.border,
   },
-  content: {
-    padding: Spacing.three,
+  listSection: {
+    flex: 1,
+    minHeight: 0,
+  },
+  fixedSectionHeader: {
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.three,
+    paddingBottom: Spacing.two,
+    gap: Spacing.one,
+  },
+  scrollList: {
+    flex: 1,
+  },
+  listContent: {
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.one,
+    paddingBottom: Spacing.three,
     gap: Spacing.three,
   },
   sectionTitle: {
     fontSize: 19,
     fontWeight: '900',
     color: Colors.light.text,
-  },
-  browserHeader: {
-    gap: Spacing.one,
   },
   browserTitleRow: {
     minHeight: TouchTarget,
