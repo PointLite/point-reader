@@ -126,8 +126,9 @@ export default function BookDetailScreen() {
               <Text style={[styles.bookTitle, { color: colors.text }]}>{metadata?.title || book.title}</Text>
               <Text style={[styles.author, { color: colors.textSecondary }]}>{metadata?.author || book.author || t('authorUnknown')}</Text>
               <View style={styles.actionRow}>
-                <ActionIcon accessibilityLabel={t('editBookPlaceholder')} icon={<Pencil size={22} color={colors.text} strokeWidth={2.6} />} />
+                <ActionIcon colors={colors} accessibilityLabel={t('editBookPlaceholder')} icon={<Pencil size={22} color={colors.text} strokeWidth={2.6} />} />
                 <ActionIcon
+                  colors={colors}
                   accessibilityLabel={t('deleteBooks')}
                   onPress={removeBook}
                   icon={<Trash2 size={23} color={colors.danger} strokeWidth={2.4} />}
@@ -188,14 +189,14 @@ export default function BookDetailScreen() {
   );
 }
 
-function ActionIcon({ icon, accessibilityLabel, onPress }: { icon: React.ReactNode; accessibilityLabel: string; onPress?: () => void }) {
+function ActionIcon({ icon, accessibilityLabel, colors, onPress }: { icon: React.ReactNode; accessibilityLabel: string; colors: AppColors; onPress?: () => void }) {
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       disabled={!onPress}
       onPress={onPress}
-      style={({ pressed }) => [styles.placeholderIcon, pressed && styles.pressedIcon]}>
+      style={({ pressed }) => [styles.placeholderIcon, { backgroundColor: colors.surfaceMuted }, pressed && styles.pressedIcon]}>
       {icon}
     </Pressable>
   );
@@ -263,7 +264,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.background,
   },
   topBar: {
-    minHeight: 64,
+    minHeight: 60,
     paddingHorizontal: Spacing.three,
     flexDirection: 'row',
     alignItems: 'center',
@@ -280,12 +281,13 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.surface,
   },
   title: {
-    fontSize: 26,
-    fontWeight: '900',
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: '800',
     color: Colors.light.text,
   },
   content: {
-    paddingHorizontal: Spacing.four,
+    paddingHorizontal: Spacing.three,
     paddingTop: Spacing.two,
     paddingBottom: Spacing.six,
     gap: Spacing.four,
@@ -296,9 +298,9 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   cover: {
-    width: 104,
-    height: 148,
-    borderRadius: Radius.small,
+    width: 108,
+    height: 154,
+    borderRadius: Radius.medium,
     borderWidth: 1,
     borderColor: Colors.light.border,
     backgroundColor: Colors.light.surfaceMuted,
@@ -316,7 +318,7 @@ const styles = StyleSheet.create({
   },
   format: {
     fontSize: 15,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.text,
   },
   summary: {
@@ -325,15 +327,15 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.one,
   },
   bookTitle: {
-    fontSize: 23,
-    lineHeight: 30,
-    fontWeight: '900',
+    fontSize: 22,
+    lineHeight: 29,
+    fontWeight: '800',
     color: Colors.light.text,
   },
   author: {
     marginTop: Spacing.two,
-    fontSize: 18,
-    lineHeight: 24,
+    fontSize: 16,
+    lineHeight: 22,
     color: Colors.light.textSecondary,
   },
   actionRow: {
@@ -343,8 +345,10 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   placeholderIcon: {
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
+    borderRadius: Radius.medium,
+    backgroundColor: Colors.light.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -353,21 +357,21 @@ const styles = StyleSheet.create({
   },
   sectionHeader: {
     marginTop: Spacing.three,
-    minHeight: 42,
+    minHeight: 40,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   sectionTitle: {
-    fontSize: 24,
-    lineHeight: 30,
-    fontWeight: '900',
-    color: Colors.light.textSecondary,
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: '800',
+    color: Colors.light.text,
   },
   metaGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    rowGap: Spacing.four,
+    rowGap: Spacing.three,
   },
   metaItem: {
     width: '50%',
@@ -380,19 +384,19 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   metaLabel: {
-    fontSize: 22,
-    lineHeight: 28,
-    fontWeight: '900',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
     color: Colors.light.text,
   },
   metaValue: {
-    fontSize: 20,
-    lineHeight: 26,
+    fontSize: 16,
+    lineHeight: 22,
     color: Colors.light.textSecondary,
   },
   description: {
-    fontSize: 20,
-    lineHeight: 32,
+    fontSize: 16,
+    lineHeight: 26,
     color: Colors.light.textSecondary,
   },
 });

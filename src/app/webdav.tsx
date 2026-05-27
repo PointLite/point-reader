@@ -361,7 +361,7 @@ export default function WebDavScreen() {
               onPress={importSelection}
               style={({ pressed }) => [
                 styles.actionButton,
-                { backgroundColor: colors.text },
+                { backgroundColor: colors.accent },
                 (selectedEntries.length === 0 || loading) && styles.actionButtonDisabled,
                 pressed && styles.pressed,
               ]}>
@@ -612,7 +612,7 @@ function SortModal({
     <Modal visible={visible} transparent animationType={modalAnimationType(einkOptimization)} onRequestClose={onClose}>
       <View style={styles.sortModalLayer}>
         <Pressable accessibilityRole="button" accessibilityLabel={t('closeSort')} onPress={onClose} style={StyleSheet.absoluteFillObject} />
-        <View style={[styles.sortCard, { width: menuWidth, top, right, maxHeight, borderColor: colors.text, backgroundColor: colors.surface }]}>
+        <View style={[styles.sortCard, { width: menuWidth, top, right, maxHeight, borderColor: colors.border, backgroundColor: colors.surface }]}>
           <Text style={[styles.sortTitle, { color: colors.text }]}>{t('sort')}</Text>
           {(['name', 'modifiedAt'] as const).map((field) => {
             const selected = field === sort.field;
@@ -625,7 +625,7 @@ function SortModal({
                 onPress={() => setField(field)}
                 style={({ pressed }) => [
                   styles.sortOption,
-                  selected && { backgroundColor: colors.text },
+                  selected && { backgroundColor: colors.accent },
                   pressed && styles.pressed,
                 ]}>
                 <View style={styles.sortOptionIcon}>
@@ -653,7 +653,7 @@ function SortModal({
                 onPress={() => setDirection(item.direction)}
                 style={({ pressed }) => [
                   styles.sortOption,
-                  selected && { backgroundColor: colors.text },
+                  selected && { backgroundColor: colors.accent },
                   pressed && styles.pressed,
                 ]}>
                 <Icon size={18} color={selected ? colors.surface : colors.text} />
@@ -697,7 +697,7 @@ function WebDavEntryRow({
         onPress={onToggle}
         hitSlop={Spacing.one}
         style={styles.checkboxTouch}>
-        <View style={[styles.checkboxBox, { borderColor: colors.text, backgroundColor: colors.surface }, selected && { backgroundColor: colors.text }]}>
+        <View style={[styles.checkboxBox, { borderColor: colors.accent, backgroundColor: colors.surface }, selected && { backgroundColor: colors.accent }]}>
           {selected ? <Check size={14} color={colors.surface} strokeWidth={3} /> : null}
         </View>
       </Pressable>
@@ -770,7 +770,7 @@ function DirectoryModal({
   return (
     <Modal visible={visible} transparent animationType={modalAnimationType(einkOptimization)} onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
-        <View style={[styles.modalCard, { borderColor: colors.text, backgroundColor: colors.surface }]}>
+        <View style={[styles.modalCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
           <View style={styles.modalHeader}>
             <Text style={[styles.modalTitle, { color: colors.text }]}>{editing ? t('editDirectory') : t('addDirectory')}</Text>
             <Pressable accessibilityRole="button" accessibilityLabel={t('close')} onPress={onClose} style={styles.modalClose}>
@@ -829,7 +829,7 @@ function DirectoryModal({
               accessibilityRole="button"
               accessibilityLabel={editing ? t('saveChanges') : t('saveDirectory')}
               onPress={onSave}
-              style={({ pressed }) => [styles.saveButton, { backgroundColor: colors.text }, pressed && styles.pressed]}>
+              style={({ pressed }) => [styles.saveButton, { backgroundColor: colors.accent }, pressed && styles.pressed]}>
               <Text style={[styles.saveButtonText, { color: colors.surface }]}>{editing ? t('saveChanges') : t('saveDirectory')}</Text>
             </Pressable>
           </View>
@@ -1025,7 +1025,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.background,
   },
   topBar: {
-    minHeight: 64,
+    minHeight: 60,
     paddingHorizontal: Spacing.three,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1045,8 +1045,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   title: {
-    fontSize: 25,
-    fontWeight: '900',
+    fontSize: 23,
+    lineHeight: 29,
+    fontWeight: '800',
     color: Colors.light.text,
   },
   subtitle: {
@@ -1064,7 +1065,7 @@ const styles = StyleSheet.create({
     minHeight: TouchTarget,
     paddingHorizontal: Spacing.three,
     borderRadius: Radius.medium,
-    backgroundColor: Colors.light.text,
+    backgroundColor: Colors.light.accent,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1075,7 +1076,7 @@ const styles = StyleSheet.create({
   },
   actionButtonText: {
     fontSize: 15,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.surface,
   },
   pressed: {
@@ -1089,7 +1090,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: Spacing.three,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(245,247,250,0.72)',
   },
   loadingCard: {
     minWidth: 156,
@@ -1121,7 +1122,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     borderRadius: Radius.medium,
     borderWidth: 1,
-    borderColor: Colors.light.text,
+    borderColor: Colors.light.border,
     backgroundColor: Colors.light.surface,
     padding: Spacing.two,
     gap: Spacing.one,
@@ -1130,7 +1131,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.two,
     paddingVertical: Spacing.one,
     fontSize: 18,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.text,
   },
   sortOption: {
@@ -1163,7 +1164,7 @@ const styles = StyleSheet.create({
   },
   fixedSectionHeader: {
     paddingHorizontal: Spacing.three,
-    paddingTop: Spacing.three,
+    paddingTop: Spacing.two,
     paddingBottom: Spacing.two,
     gap: Spacing.one,
   },
@@ -1177,8 +1178,9 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
   },
   sectionTitle: {
-    fontSize: 19,
-    fontWeight: '900',
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: '800',
     color: Colors.light.text,
   },
   browserTitleRow: {
@@ -1194,7 +1196,7 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
   },
   directoryCard: {
-    minHeight: 118,
+    minHeight: 108,
     borderRadius: Radius.medium,
     borderWidth: 1,
     borderColor: Colors.light.border,
@@ -1205,7 +1207,7 @@ const styles = StyleSheet.create({
   },
   directoryMain: {
     flex: 1,
-    minHeight: 118,
+    minHeight: 108,
     padding: Spacing.three,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1226,8 +1228,9 @@ const styles = StyleSheet.create({
     gap: Spacing.one,
   },
   directoryName: {
-    fontSize: 18,
-    fontWeight: '900',
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: '800',
     color: Colors.light.text,
   },
   directoryUrl: {
@@ -1237,12 +1240,12 @@ const styles = StyleSheet.create({
   },
   directoryMeta: {
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '700',
     color: Colors.light.accent,
   },
   directoryActions: {
     width: 64,
-    minHeight: 118,
+    minHeight: 108,
     borderLeftWidth: 1,
     borderLeftColor: Colors.light.border,
   },
@@ -1258,7 +1261,7 @@ const styles = StyleSheet.create({
     borderTopColor: Colors.light.border,
   },
   entry: {
-    minHeight: 68,
+    minHeight: 64,
     borderRadius: Radius.medium,
     borderWidth: 1,
     borderColor: Colors.light.border,
@@ -1269,7 +1272,7 @@ const styles = StyleSheet.create({
   },
   checkboxTouch: {
     width: 44,
-    minHeight: 68,
+    minHeight: 64,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1278,17 +1281,17 @@ const styles = StyleSheet.create({
     height: 22,
     borderRadius: 3,
     borderWidth: 2,
-    borderColor: Colors.light.text,
+    borderColor: Colors.light.accent,
     backgroundColor: Colors.light.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
   checkboxBoxSelected: {
-    backgroundColor: Colors.light.text,
+    backgroundColor: Colors.light.accent,
   },
   entryMain: {
     flex: 1,
-    minHeight: 68,
+    minHeight: 64,
     paddingVertical: Spacing.two,
     paddingLeft: Spacing.one,
     paddingRight: Spacing.three,
@@ -1319,7 +1322,8 @@ const styles = StyleSheet.create({
   },
   entryName: {
     fontSize: 16,
-    fontWeight: '900',
+    lineHeight: 21,
+    fontWeight: '800',
     color: Colors.light.text,
   },
   entryMeta: {
@@ -1344,13 +1348,13 @@ const styles = StyleSheet.create({
   modalBackdrop: {
     flex: 1,
     padding: Spacing.three,
-    backgroundColor: 'rgba(23,23,23,0.28)',
+    backgroundColor: 'rgba(20,25,35,0.26)',
     justifyContent: 'center',
   },
   modalCard: {
     borderRadius: Radius.medium,
     borderWidth: 1,
-    borderColor: Colors.light.text,
+    borderColor: Colors.light.border,
     backgroundColor: Colors.light.surface,
     padding: Spacing.three,
     gap: Spacing.three,
@@ -1362,8 +1366,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   modalTitle: {
-    fontSize: 21,
-    fontWeight: '900',
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: '800',
     color: Colors.light.text,
   },
   modalClose: {
@@ -1378,7 +1383,7 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 14,
-    fontWeight: '900',
+    fontWeight: '700',
     color: Colors.light.text,
   },
   input: {
@@ -1408,20 +1413,20 @@ const styles = StyleSheet.create({
   },
   testButtonText: {
     fontSize: 15,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.text,
   },
   saveButton: {
     flex: 1,
     minHeight: TouchTarget,
     borderRadius: Radius.medium,
-    backgroundColor: Colors.light.text,
+    backgroundColor: Colors.light.accent,
     alignItems: 'center',
     justifyContent: 'center',
   },
   saveButtonText: {
     fontSize: 16,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.surface,
   },
 });

@@ -108,7 +108,7 @@ export default function SettingsScreen() {
                     accessibilityLabel={`${t('theme')}${label}`}
                     accessibilityState={{ selected }}
                     onPress={() => update({ colorScheme })}
-                    style={[styles.schemeOption, selected && { backgroundColor: colors.text }]}>
+                    style={[styles.schemeOption, selected && { backgroundColor: colors.accent }]}>
                     <Text style={[styles.modeOptionText, { color: colors.text }, selected && { color: colors.surface }]}>{label}</Text>
                   </Pressable>
                 );
@@ -130,7 +130,7 @@ export default function SettingsScreen() {
                     accessibilityLabel={mode === 'scroll' ? t('scrollTurn') : t('tapTurn')}
                     accessibilityState={{ selected }}
                     onPress={() => update({ mode })}
-                    style={[styles.modeOption, selected && { backgroundColor: colors.text }]}>
+                    style={[styles.modeOption, selected && { backgroundColor: colors.accent }]}>
                     <Text style={[styles.modeOptionText, { color: colors.text }, selected && { color: colors.surface }]}>
                       {mode === 'scroll' ? t('scroll') : t('tap')}
                     </Text>
@@ -222,7 +222,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.background,
   },
   topBar: {
-    minHeight: 64,
+    minHeight: 60,
     paddingHorizontal: Spacing.three,
     flexDirection: 'row',
     alignItems: 'center',
@@ -239,13 +239,14 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.surface,
   },
   title: {
-    fontSize: 28,
-    fontWeight: '900',
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: '800',
     color: Colors.light.text,
   },
   content: {
     padding: Spacing.three,
-    gap: Spacing.three,
+    gap: Spacing.two,
   },
   panel: {
     borderRadius: Radius.medium,
@@ -257,7 +258,8 @@ const styles = StyleSheet.create({
   },
   panelTitle: {
     fontSize: 17,
-    fontWeight: '900',
+    lineHeight: 22,
+    fontWeight: '700',
     color: Colors.light.text,
   },
   optionRow: {
@@ -278,7 +280,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     fontSize: 15,
     lineHeight: 20,
-    fontWeight: '700',
+    fontWeight: '600',
     color: Colors.light.textSecondary,
   },
   pressed: {
@@ -324,7 +326,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   modeOptionSelected: {
-    backgroundColor: Colors.light.text,
+    backgroundColor: Colors.light.accent,
   },
   modeOptionText: {
     fontSize: 14,
@@ -339,7 +341,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     padding: Spacing.three,
-    backgroundColor: 'rgba(23,23,23,0.28)',
+    backgroundColor: 'rgba(20,25,35,0.26)',
   },
   languageCard: {
     borderRadius: Radius.medium,
@@ -350,9 +352,9 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   languageTitle: {
-    fontSize: 20,
+    fontSize: 19,
     lineHeight: 24,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.text,
     marginBottom: Spacing.one,
   },
@@ -368,9 +370,9 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   languageOptionText: {
-    fontSize: 17,
+    fontSize: 16,
     lineHeight: 22,
-    fontWeight: '800',
+    fontWeight: '700',
     color: Colors.light.text,
   },
 });

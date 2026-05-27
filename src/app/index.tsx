@@ -537,7 +537,7 @@ export default function ShelfScreen() {
       )}
 
       {selectionMode ? (
-        <View style={[styles.selectionSheet, { borderColor: colors.text, backgroundColor: colors.surface }]}>
+        <View style={[styles.selectionSheet, { borderColor: colors.accent, backgroundColor: colors.surface }]}>
           <Text style={[styles.selectionTitle, { color: colors.text }]}>
             {folderSelection ? t('selectedFolder') : t('selectedBooks', { count: selectedCount })}
           </Text>
@@ -578,7 +578,7 @@ export default function ShelfScreen() {
           <View
             style={[
               styles.sortPopover,
-              { borderColor: colors.text, backgroundColor: colors.surface },
+              { borderColor: colors.border, backgroundColor: colors.surface },
               {
                 top: sortMenuFrame ? sortMenuFrame.y + sortMenuFrame.height + Spacing.one : Spacing.six,
                 right: sortMenuFrame
@@ -597,7 +597,7 @@ export default function ShelfScreen() {
                   onPress={() => setSortField(field)}
                   style={({ pressed }) => [
                     styles.sortMenuItem,
-                    selected && [styles.sortMenuItemSelected, { backgroundColor: colors.text }],
+                    selected && [styles.sortMenuItemSelected, { backgroundColor: colors.accent }],
                     pressed && styles.sortMenuItemPressed,
                   ]}>
                   <View style={styles.sortMenuIconSlot}>
@@ -624,7 +624,7 @@ export default function ShelfScreen() {
                   onPress={() => setSortDirection(item.direction)}
                   style={({ pressed }) => [
                     styles.sortMenuItem,
-                    selected && [styles.sortMenuItemSelected, { backgroundColor: colors.text }],
+                    selected && [styles.sortMenuItemSelected, { backgroundColor: colors.accent }],
                     pressed && styles.sortMenuItemPressed,
                   ]}>
                   <Icon size={18} color={selected ? colors.surface : colors.text} />
@@ -791,7 +791,7 @@ function WebDavImportProgressRow({
         <Text style={[styles.webDavImportResult, { color: colors.textSecondary }]}>{t('importedBooks', { count: state.imported })}</Text>
       )}
       <View style={[styles.webDavImportTrack, { backgroundColor: colors.backgroundElement }]}>
-        <View style={[styles.webDavImportFill, { backgroundColor: colors.text, width: `${progress * 100}%` }]} />
+        <View style={[styles.webDavImportFill, { backgroundColor: colors.accent, width: `${progress * 100}%` }]} />
       </View>
     </View>
   );
@@ -824,7 +824,7 @@ function FolderCard({
       <View
         style={[
           styles.folderCover,
-          { height: width * 1.44, borderColor: selected ? colors.text : colors.border, backgroundColor: colors.surface },
+          { height: width * 1.44, borderColor: selected ? colors.accent : colors.border, backgroundColor: selected ? colors.accentSoft : colors.surface },
           selected && styles.folderCoverSelected,
         ]}>
         <View style={[styles.folderTab, { borderColor: colors.border, backgroundColor: colors.backgroundElement }]} />
@@ -840,7 +840,7 @@ function FolderCard({
           ))}
         </View>
         {selected ? (
-          <View style={[styles.folderSelectedBadge, { backgroundColor: colors.text }]}>
+          <View style={[styles.folderSelectedBadge, { backgroundColor: colors.accent }]}>
             <Check size={18} color={colors.surface} strokeWidth={3} />
           </View>
         ) : null}
@@ -961,14 +961,14 @@ function ImportTile({
       onPress={onPress}
       style={({ pressed }) => [
         styles.importTile,
-        { borderColor: colors.border, backgroundColor: colors.surface },
+        { borderColor: colors.border, backgroundColor: colors.surfaceMuted },
         {
           width,
           height: width * 1.44,
           opacity: importing ? 0.45 : pressed ? 0.65 : 1,
         },
       ]}>
-      <Plus size={42} color={colors.textSecondary} strokeWidth={1.8} />
+      <Plus size={42} color={colors.text} strokeWidth={1.8} />
     </Pressable>
   );
 }
@@ -985,7 +985,7 @@ const styles = StyleSheet.create({
   },
   gridContent: {
     paddingHorizontal: Spacing.three,
-    paddingTop: Spacing.three,
+    paddingTop: Spacing.two,
     paddingBottom: Spacing.five,
     gap: Spacing.four,
   },
@@ -996,7 +996,7 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   groupHeader: {
-    minHeight: 58,
+    minHeight: 56,
     borderRadius: Radius.medium,
     borderWidth: 1,
     borderColor: Colors.light.border,
@@ -1018,9 +1018,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   groupHeaderTitle: {
-    fontSize: 18,
+    fontSize: 17,
     lineHeight: 22,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.text,
   },
   webDavImportRow: {
@@ -1044,7 +1044,7 @@ const styles = StyleSheet.create({
   webDavImportTitle: {
     fontSize: 14,
     lineHeight: 18,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.text,
   },
   webDavImportMeta: {
@@ -1071,14 +1071,14 @@ const styles = StyleSheet.create({
   },
   webDavImportFill: {
     height: 3,
-    backgroundColor: Colors.light.text,
+    backgroundColor: Colors.light.accent,
   },
   listWithSheet: {
     paddingBottom: 144,
   },
   header: {
     paddingHorizontal: Spacing.three,
-    paddingTop: Spacing.three,
+    paddingTop: Spacing.two,
     paddingBottom: Spacing.two,
     zIndex: 20,
   },
@@ -1094,7 +1094,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.medium,
     borderWidth: 1,
     borderColor: Colors.light.border,
-    backgroundColor: Colors.light.surface,
+    backgroundColor: Colors.light.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1104,7 +1104,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.medium,
     borderWidth: 1,
     borderColor: Colors.light.border,
-    backgroundColor: Colors.light.surface,
+    backgroundColor: Colors.light.surfaceMuted,
     flexDirection: 'row',
     alignItems: 'center',
     paddingLeft: Spacing.three,
@@ -1113,7 +1113,7 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     minHeight: 48,
-    fontSize: 18,
+    fontSize: 16,
     color: Colors.light.text,
     paddingHorizontal: Spacing.two,
   },
@@ -1129,7 +1129,7 @@ const styles = StyleSheet.create({
     width: SORT_POPOVER_WIDTH,
     borderRadius: Radius.medium,
     borderWidth: 1,
-    borderColor: Colors.light.text,
+    borderColor: Colors.light.border,
     backgroundColor: Colors.light.surface,
     paddingVertical: Spacing.one,
     zIndex: 40,
@@ -1143,7 +1143,7 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   sortMenuItemSelected: {
-    backgroundColor: Colors.light.text,
+    backgroundColor: Colors.light.accent,
   },
   sortMenuItemPressed: {
     opacity: 0.72,
@@ -1170,7 +1170,7 @@ const styles = StyleSheet.create({
   importModalLayer: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: 'rgba(20,25,35,0.22)',
   },
   importSheet: {
     marginHorizontal: 0,
@@ -1187,9 +1187,9 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   importSheetTitle: {
-    fontSize: 20,
+    fontSize: 19,
     lineHeight: 24,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.text,
   },
   importSheetHint: {
@@ -1207,7 +1207,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.medium,
     borderWidth: 1,
     borderColor: Colors.light.border,
-    backgroundColor: Colors.light.background,
+    backgroundColor: Colors.light.surfaceMuted,
     padding: Spacing.two,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1230,7 +1230,7 @@ const styles = StyleSheet.create({
   importActionTitle: {
     fontSize: 16,
     lineHeight: 20,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.text,
   },
   importActionDescription: {
@@ -1242,7 +1242,7 @@ const styles = StyleSheet.create({
   renameModalLayer: {
     flex: 1,
     padding: Spacing.three,
-    backgroundColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: 'rgba(20,25,35,0.22)',
     justifyContent: 'center',
   },
   renameCard: {
@@ -1254,9 +1254,9 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
   },
   renameTitle: {
-    fontSize: 20,
+    fontSize: 19,
     lineHeight: 24,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.text,
   },
   renameInput: {
@@ -1290,7 +1290,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.medium,
     borderWidth: 1,
     borderColor: Colors.light.border,
-    backgroundColor: Colors.light.surface,
+    backgroundColor: Colors.light.surfaceMuted,
     padding: Spacing.two,
     overflow: 'hidden',
   },
@@ -1340,7 +1340,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: Colors.light.text,
+    backgroundColor: Colors.light.accent,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1351,12 +1351,13 @@ const styles = StyleSheet.create({
     minHeight: 40,
     fontSize: 16,
     lineHeight: 20,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.text,
   },
   folderCount: {
-    fontSize: 15,
-    lineHeight: 20,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
     color: Colors.light.textSecondary,
   },
   selectionSheet: {
@@ -1366,14 +1367,14 @@ const styles = StyleSheet.create({
     bottom: Spacing.three,
     borderRadius: Radius.medium,
     borderWidth: 1,
-    borderColor: Colors.light.text,
+    borderColor: Colors.light.border,
     backgroundColor: Colors.light.surface,
     padding: Spacing.three,
     gap: Spacing.three,
   },
   selectionTitle: {
     fontSize: 16,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.text,
   },
   sheetActions: {

@@ -23,7 +23,7 @@ export function SettingRow({ title, description, value, onValueChange, colors = 
         accessibilityLabel={title}
         value={value}
         onValueChange={onValueChange}
-        trackColor={{ false: colors.backgroundElement, true: colors.text }}
+        trackColor={{ false: colors.backgroundElement, true: colors.accent }}
         thumbColor={colors.surface}
         ios_backgroundColor={colors.backgroundElement}
         style={styles.switch}
@@ -34,7 +34,7 @@ export function SettingRow({ title, description, value, onValueChange, colors = 
 
 const styles = StyleSheet.create({
   row: {
-    minHeight: 72,
+    minHeight: 76,
     padding: Spacing.three,
     borderRadius: Radius.medium,
     borderWidth: 1,
@@ -50,12 +50,13 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 16,
-    fontWeight: '800',
+    lineHeight: 21,
+    fontWeight: '700',
     color: Colors.light.text,
   },
   description: {
     fontSize: 13,
-    lineHeight: 18,
+    lineHeight: 19,
     color: Colors.light.textSecondary,
   },
   switch: {

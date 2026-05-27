@@ -37,7 +37,7 @@ function BookCardBase({ book, selected, selectionMode, width, colors = Colors.li
       <View
         style={[
           styles.cover,
-          { height: width * 1.44, borderColor: selected ? colors.text : colors.border, backgroundColor: colors.surface },
+          { height: width * 1.44, borderColor: selected ? colors.accent : colors.border, backgroundColor: colors.surface },
           selected && styles.selectedCover,
         ]}>
         {book.coverUri ? (
@@ -49,11 +49,11 @@ function BookCardBase({ book, selected, selectionMode, width, colors = Colors.li
           </View>
         )}
         {selected ? (
-          <View style={[styles.selectedBadge, { backgroundColor: colors.text }]}>
+          <View style={[styles.selectedBadge, { backgroundColor: colors.accent }]}>
             <Check size={18} color={colors.surface} strokeWidth={3} />
           </View>
         ) : null}
-        {selectionMode && !selected ? <View style={[styles.checkbox, { borderColor: colors.text, backgroundColor: colors.surface }]} /> : null}
+        {selectionMode && !selected ? <View style={[styles.checkbox, { borderColor: colors.accent, backgroundColor: colors.surface }]} /> : null}
       </View>
       <View style={styles.meta}>
         <Text
@@ -95,7 +95,7 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   pressed: {
-    opacity: 0.72,
+    opacity: 0.78,
   },
   cover: {
     width: '100%',
@@ -107,7 +107,7 @@ const styles = StyleSheet.create({
   },
   selectedCover: {
     borderWidth: 3,
-    borderColor: Colors.light.text,
+    borderColor: Colors.light.accent,
   },
   coverImage: {
     width: '100%',
@@ -119,7 +119,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: Spacing.two,
     padding: Spacing.two,
-    backgroundColor: Colors.light.surface,
+    backgroundColor: Colors.light.surfaceMuted,
   },
   format: {
     fontSize: 12,
@@ -138,12 +138,13 @@ const styles = StyleSheet.create({
   },
   title: {
     minHeight: 40,
-    fontWeight: '900',
+    fontWeight: '800',
     color: Colors.light.text,
   },
   progressText: {
-    fontSize: 15,
-    lineHeight: 20,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
     color: Colors.light.textSecondary,
   },
   readTag: {
@@ -153,7 +154,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.accentSoft,
     color: Colors.light.text,
     fontSize: 12,
-    fontWeight: '900',
+    fontWeight: '800',
     paddingHorizontal: Spacing.two,
     paddingVertical: 2,
   },
@@ -165,7 +166,7 @@ const styles = StyleSheet.create({
     paddingVertical: 1,
     fontSize: 10,
     lineHeight: 13,
-    fontWeight: '800',
+    fontWeight: '700',
     overflow: 'hidden',
   },
   checkbox: {
@@ -176,7 +177,7 @@ const styles = StyleSheet.create({
     height: 24,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: Colors.light.text,
+    borderColor: Colors.light.accent,
     backgroundColor: Colors.light.surface,
   },
   selectedBadge: {
@@ -186,7 +187,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: Colors.light.text,
+    backgroundColor: Colors.light.accent,
     alignItems: 'center',
     justifyContent: 'center',
   },

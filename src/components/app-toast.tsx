@@ -55,7 +55,7 @@ export function ToastViewport({ colors }: { colors: AppColors }) {
 
   return (
     <View pointerEvents="none" style={[styles.layer, { paddingBottom: height * 0.15 }]}>
-      <View style={[styles.toast, { backgroundColor: colors.text }]}>
+      <View style={[styles.toast, { backgroundColor: colors.accent }]}>
         <Text style={[styles.toastText, { color: colors.surface }]}>{message}</Text>
       </View>
     </View>
@@ -80,7 +80,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.two,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.light.text,
+    backgroundColor: Colors.light.accent,
   },
   toastText: {
     fontSize: 14,

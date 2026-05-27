@@ -28,7 +28,7 @@ export function InkButton({
 }: InkButtonProps) {
   const isPrimary = variant === 'primary';
   const isDanger = variant === 'danger';
-  const backgroundColor = selected || isPrimary ? colors.text : variant === 'quiet' ? 'transparent' : colors.surface;
+  const backgroundColor = selected || isPrimary ? colors.accent : variant === 'quiet' ? 'transparent' : colors.surfaceMuted;
   const color = selected || isPrimary ? colors.surface : isDanger ? colors.danger : colors.text;
 
   return (
@@ -41,8 +41,8 @@ export function InkButton({
         styles.button,
         {
           backgroundColor,
-          borderColor: isDanger ? colors.danger : colors.border,
-          opacity: disabled ? 0.45 : pressed ? 0.72 : 1,
+          borderColor: selected || isPrimary ? colors.accent : isDanger ? colors.danger : colors.border,
+          opacity: disabled ? 0.42 : pressed ? 0.78 : 1,
         },
         style,
       ]}>
@@ -67,6 +67,6 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: '800',
   },
 });

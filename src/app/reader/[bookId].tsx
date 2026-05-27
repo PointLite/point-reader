@@ -34,12 +34,13 @@ import { EpubScrollPane, type EpubResumeRequest, type EpubSeekRequest } from '@/
 import { ImagePreviewModal } from '@/components/reader/image-preview-modal';
 import { ProgressToolIcon, ReaderSheet } from '@/components/reader/reader-sheet';
 import { PdfPane } from '@/components/reader/pdf-pane';
-import { Colors, Spacing, TouchTarget } from '@/constants/theme';
+import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
 import { getBook, updateBookProgress } from '@/lib/books';
 import { loadEpubHtmlBook, type EpubHtmlBook } from '@/lib/epubContent';
 import { clearLastReaderBookId, setLastReaderBookId } from '@/lib/lastReader';
 import { useTranslation } from '@/lib/i18n';
 import { animateLayoutIfEnabled } from '@/lib/motion';
+import { appThemeFor } from '@/lib/theme';
 import {
   fontFamilyFor,
   loadTextChapters,
@@ -61,7 +62,6 @@ const APP_RESUME_PROGRESS_GUARD_MS = 2600;
 const EPUB_REBUILD_TARGET_GUARD_MS = 5000;
 const PROGRESS_BACKWARD_TOLERANCE = 0.0002;
 const READER_TOOLBAR_HEIGHT = 68;
-const ACTIVE_TOOL_COLOR = '#3478F6';
 const BATTERY_BODY_WIDTH = 26;
 const BATTERY_BODY_HEIGHT = 14;
 const TAP_ZONE_EDGE_RATIO = 0.35;
@@ -320,8 +320,23 @@ export default function ReaderScreen() {
   const backgroundColor = readerBackgroundFor(settings, systemColorScheme);
   const foregroundColor = readerForegroundFor(settings, systemColorScheme);
   const readerIsDark = settings.colorScheme === 'dark' || (settings.colorScheme === 'system' && systemColorScheme === 'dark');
-  const toolbarSurface = readerIsDark ? Colors.dark.surface : Colors.light.surface;
-  const toolbarBorder = readerIsDark ? 'rgba(245,245,244,0.16)' : 'rgba(28,25,23,0.16)';
+  const readerChromeColors = appThemeFor(settings.colorScheme, systemColorScheme).colors;
+  const toolbarSurface = readerChromeColors.surface;
+  const toolbarBorder = readerChromeColors.border;
+  const toolbarIconColor = readerChromeColors.textSecondary;
+  const toolbarIconActiveColor = readerChromeColors.text;
+  const isPdfBook = book?.format === 'pdf';
+  const themeToolDisabled = readerIsDark || isPdfBook;
+  const fontToolDisabled = isPdfBook;
+  const disabledReaderSheets: ('theme' | 'font')[] = [];
+  if (themeToolDisabled) disabledReaderSheets.push('theme');
+  if (fontToolDisabled) disabledReaderSheets.push('font');
+
+  useEffect(() => {
+    if ((sheet === 'theme' && themeToolDisabled) || (sheet === 'font' && fontToolDisabled)) {
+      setSheet(null);
+    }
+  }, [fontToolDisabled, sheet, themeToolDisabled]);
 
   const updateSettings = async (patch: Partial<ReadingSettings>) => {
     const next = { ...settings, ...patch };
@@ -695,7 +710,7 @@ export default function ReaderScreen() {
           <PdfPane
             key={book.id}
             book={book}
-            colors={readerIsDark ? Colors.dark : Colors.light}
+            colors={readerChromeColors}
             seekRequest={pdfSeekRequest}
             turnRequest={pdfTurnRequest}
             onProgress={scheduleProgressSave}
@@ -761,7 +776,7 @@ export default function ReaderScreen() {
           sheet={sheet}
           settings={settingsRef.current}
           systemColorScheme={systemColorScheme}
-          colors={readerIsDark ? Colors.dark : Colors.light}
+          colors={readerChromeColors}
           progress={displayProgress}
           chapters={sheetChapters}
           hasChapters={sheetChapters.length > 0}
@@ -816,7 +831,7 @@ export default function ReaderScreen() {
           onSettings={updateSettings}
           onStyleChange={guardProgressForStyleChange}
           onSeekProgress={seekToProgress}
-          disabledSheets={book.format === 'pdf' ? ['theme', 'font'] : []}
+          disabledSheets={disabledReaderSheets}
           resolveChapterIndex={(href, fallbackIndex) => {
             if (book.format !== 'epub' || !epubHtmlBook) return fallbackIndex;
             const index = epubHtmlBook.chapters.findIndex((chapter) => isSameEpubHref(chapter.href, href));
@@ -834,20 +849,31 @@ export default function ReaderScreen() {
               animateLayoutIfEnabled(settings.einkOptimization);
               setSheet('toc');
             }}
-            style={[styles.toolbarIconButton, sheet === 'toc' && styles.toolbarIconButtonActive]}>
-            <List size={28} strokeWidth={2.2} color={sheet === 'toc' ? ACTIVE_TOOL_COLOR : foregroundColor} />
+            style={[
+              styles.toolbarIconButton,
+              sheet === 'toc' && [styles.toolbarIconButtonActive, { backgroundColor: readerChromeColors.backgroundSelected }],
+            ]}>
+            <List size={28} strokeWidth={2.2} color={sheet === 'toc' ? toolbarIconActiveColor : toolbarIconColor} />
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t('background')}
-            accessibilityState={{ disabled: book.format === 'pdf' }}
-            disabled={book.format === 'pdf'}
+            accessibilityState={{ disabled: themeToolDisabled }}
+            disabled={themeToolDisabled}
             onPress={() => {
               animateLayoutIfEnabled(settings.einkOptimization);
               setSheet('theme');
             }}
-            style={[styles.toolbarIconButton, sheet === 'theme' && styles.toolbarIconButtonActive, book.format === 'pdf' && styles.toolbarIconButtonDisabled]}>
-            <Sun size={28} strokeWidth={2.2} color={book.format === 'pdf' ? disabledToolColor(foregroundColor) : sheet === 'theme' ? ACTIVE_TOOL_COLOR : foregroundColor} />
+            style={[
+              styles.toolbarIconButton,
+              sheet === 'theme' && [styles.toolbarIconButtonActive, { backgroundColor: readerChromeColors.backgroundSelected }],
+              themeToolDisabled && styles.toolbarIconButtonDisabled,
+            ]}>
+            <Sun
+              size={28}
+              strokeWidth={2.2}
+              color={themeToolDisabled ? disabledToolColor(toolbarIconColor) : sheet === 'theme' ? toolbarIconActiveColor : toolbarIconColor}
+            />
           </Pressable>
           <Pressable
             accessibilityRole="button"
@@ -856,20 +882,31 @@ export default function ReaderScreen() {
               animateLayoutIfEnabled(settings.einkOptimization);
               setSheet('progress');
             }}
-            style={[styles.toolbarIconButton, sheet === 'progress' && styles.toolbarIconButtonActive]}>
-            <ProgressToolIcon color={sheet === 'progress' ? ACTIVE_TOOL_COLOR : foregroundColor} backgroundColor={toolbarSurface} />
+            style={[
+              styles.toolbarIconButton,
+              sheet === 'progress' && [styles.toolbarIconButtonActive, { backgroundColor: readerChromeColors.backgroundSelected }],
+            ]}>
+            <ProgressToolIcon color={sheet === 'progress' ? toolbarIconActiveColor : toolbarIconColor} backgroundColor={toolbarSurface} />
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t('font')}
-            accessibilityState={{ disabled: book.format === 'pdf' }}
-            disabled={book.format === 'pdf'}
+            accessibilityState={{ disabled: fontToolDisabled }}
+            disabled={fontToolDisabled}
             onPress={() => {
               animateLayoutIfEnabled(settings.einkOptimization);
               setSheet('font');
             }}
-            style={[styles.toolbarIconButton, sheet === 'font' && styles.toolbarIconButtonActive, book.format === 'pdf' && styles.toolbarIconButtonDisabled]}>
-            <Type size={30} strokeWidth={2.1} color={book.format === 'pdf' ? disabledToolColor(foregroundColor) : sheet === 'font' ? ACTIVE_TOOL_COLOR : foregroundColor} />
+            style={[
+              styles.toolbarIconButton,
+              sheet === 'font' && [styles.toolbarIconButtonActive, { backgroundColor: readerChromeColors.backgroundSelected }],
+              fontToolDisabled && styles.toolbarIconButtonDisabled,
+            ]}>
+            <Type
+              size={30}
+              strokeWidth={2.1}
+              color={fontToolDisabled ? disabledToolColor(toolbarIconColor) : sheet === 'font' ? toolbarIconActiveColor : toolbarIconColor}
+            />
           </Pressable>
         </View>
       ) : null}
@@ -1543,7 +1580,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    paddingHorizontal: Spacing.four,
+    paddingHorizontal: Spacing.three,
     paddingBottom: Spacing.one,
     borderTopWidth: 1,
     borderTopColor: 'rgba(28,25,23,0.16)',
@@ -1553,11 +1590,12 @@ const styles = StyleSheet.create({
   toolbarIconButton: {
     width: 52,
     height: 52,
+    borderRadius: Radius.medium,
     alignItems: 'center',
     justifyContent: 'center',
   },
   toolbarIconButtonActive: {
-    backgroundColor: 'transparent',
+    backgroundColor: Colors.light.backgroundSelected,
   },
   toolbarIconButtonDisabled: {
     opacity: 0.42,
