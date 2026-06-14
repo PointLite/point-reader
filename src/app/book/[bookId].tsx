@@ -1,9 +1,10 @@
 import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { File as ExpoFile } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system/legacy';
+import { Image } from 'expo-image';
 import { BookOpen, ChevronDown, ChevronLeft, ChevronUp, Pencil, Trash2 } from 'lucide-react-native';
-import React, { useCallback, useState } from 'react';
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useReducer } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useToast } from '@/components/app-toast';
@@ -14,36 +15,89 @@ import { useTranslation } from '@/lib/i18n';
 import { useAppTheme, type AppColors } from '@/lib/theme';
 import type { Book } from '@/types/reader';
 
+type BookDetailState = {
+  book: Book | null;
+  fileSize: number | null;
+  fileCreatedAt: number | null;
+  fileUpdatedAt: number | null;
+  metadata: EpubDetailMetadata | null;
+  expandedSections: {
+    metadata: boolean;
+    series: boolean;
+    description: boolean;
+  };
+};
+
+const initialBookDetailState: BookDetailState = {
+  book: null,
+  fileSize: null,
+  fileCreatedAt: null,
+  fileUpdatedAt: null,
+  metadata: null,
+  expandedSections: {
+    metadata: true,
+    series: true,
+    description: true,
+  },
+};
+
+type BookDetailAction =
+  | { type: 'bookLoaded'; book: Book | null }
+  | { type: 'fileInfoLoaded'; fileSize: number | null; fileCreatedAt: number | null; fileUpdatedAt: number | null }
+  | { type: 'metadataLoaded'; metadata: EpubDetailMetadata | null }
+  | { type: 'toggleSection'; section: keyof BookDetailState['expandedSections'] };
+
+function bookDetailReducer(state: BookDetailState, action: BookDetailAction): BookDetailState {
+  switch (action.type) {
+    case 'bookLoaded':
+      return {
+        ...state,
+        book: action.book,
+        fileSize: null,
+        fileCreatedAt: null,
+        fileUpdatedAt: null,
+        metadata: null,
+      };
+    case 'fileInfoLoaded':
+      return {
+        ...state,
+        fileSize: action.fileSize,
+        fileCreatedAt: action.fileCreatedAt,
+        fileUpdatedAt: action.fileUpdatedAt,
+      };
+    case 'metadataLoaded':
+      return { ...state, metadata: action.metadata };
+    case 'toggleSection':
+      return {
+        ...state,
+        expandedSections: {
+          ...state.expandedSections,
+          [action.section]: !state.expandedSections[action.section],
+        },
+      };
+    default:
+      return state;
+  }
+}
+
 export default function BookDetailScreen() {
   const { t, language } = useTranslation();
   const showToast = useToast();
   const { colors } = useAppTheme();
   const { bookId } = useLocalSearchParams<{ bookId: string }>();
-  const [book, setBook] = useState<Book | null>(null);
-  const [fileSize, setFileSize] = useState<number | null>(null);
-  const [fileCreatedAt, setFileCreatedAt] = useState<number | null>(null);
-  const [fileUpdatedAt, setFileUpdatedAt] = useState<number | null>(null);
-  const [metadata, setMetadata] = useState<EpubDetailMetadata | null>(null);
-  const [expandedSections, setExpandedSections] = useState({
-    metadata: true,
-    series: true,
-    description: true,
-  });
+  const [state, dispatch] = useReducer(bookDetailReducer, initialBookDetailState);
+  const { book, fileSize, fileCreatedAt, fileUpdatedAt, metadata, expandedSections } = state;
 
   useFocusEffect(
-    useCallback(() => {
+    () => {
       let mounted = true;
       async function load() {
         try {
           if (!bookId) return;
           const nextBook = await getBook(bookId);
           if (!mounted) return;
-          setBook(nextBook);
+          dispatch({ type: 'bookLoaded', book: nextBook });
           if (!nextBook) {
-            setFileSize(null);
-            setFileCreatedAt(null);
-            setFileUpdatedAt(null);
-            setMetadata(null);
             return;
           }
           const info = await FileSystem.getInfoAsync(nextBook.fileUri);
@@ -54,15 +108,18 @@ export default function BookDetailScreen() {
             createdAt = null;
           }
           if (mounted) {
-            setFileSize(info.exists ? info.size ?? null : null);
-            setFileUpdatedAt(info.exists ? info.modificationTime * 1000 : null);
-            setFileCreatedAt(createdAt);
+            dispatch({
+              type: 'fileInfoLoaded',
+              fileSize: info.exists ? info.size ?? null : null,
+              fileUpdatedAt: info.exists ? info.modificationTime * 1000 : null,
+              fileCreatedAt: createdAt,
+            });
           }
           if (nextBook.format === 'epub') {
             const nextMetadata = await extractEpubDetailMetadata(nextBook.fileUri);
-            if (mounted) setMetadata(nextMetadata);
+            if (mounted) dispatch({ type: 'metadataLoaded', metadata: nextMetadata });
           } else if (mounted) {
-            setMetadata(null);
+            dispatch({ type: 'metadataLoaded', metadata: null });
           }
         } catch (error) {
           if (mounted) {
@@ -74,10 +131,10 @@ export default function BookDetailScreen() {
       return () => {
         mounted = false;
       };
-    }, [bookId, showToast, t])
+    }
   );
 
-  const removeBook = useCallback(() => {
+  const removeBook = () => {
     if (!book) return;
     Alert.alert(t('deleteBooks'), t('deleteBookMessage', { title: book.title }), [
       { text: t('cancel'), style: 'cancel' },
@@ -94,7 +151,7 @@ export default function BookDetailScreen() {
         },
       },
     ]);
-  }, [book, showToast, t]);
+  };
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: colors.background }]}>
@@ -114,7 +171,7 @@ export default function BookDetailScreen() {
           <View style={styles.hero}>
             <View style={[styles.cover, { borderColor: colors.border, backgroundColor: colors.surfaceMuted }]}>
               {book.coverUri ? (
-                <Image source={{ uri: book.coverUri }} style={styles.coverImage} resizeMode="cover" />
+                <Image source={{ uri: book.coverUri }} style={styles.coverImage} contentFit="cover" />
               ) : (
                 <View style={styles.fallbackCover}>
                   <BookOpen size={34} color={colors.text} />
@@ -141,7 +198,7 @@ export default function BookDetailScreen() {
             title={t('metadata')}
             colors={colors}
             expanded={expandedSections.metadata}
-            onPress={() => setExpandedSections((current) => ({ ...current, metadata: !current.metadata }))}
+            onPress={() => dispatch({ type: 'toggleSection', section: 'metadata' })}
           />
           {expandedSections.metadata ? (
             <>
@@ -163,7 +220,7 @@ export default function BookDetailScreen() {
             title={t('series')}
             colors={colors}
             expanded={expandedSections.series}
-            onPress={() => setExpandedSections((current) => ({ ...current, series: !current.series }))}
+            onPress={() => dispatch({ type: 'toggleSection', section: 'series' })}
           />
           {expandedSections.series ? (
             <View style={styles.metaGrid}>
@@ -176,7 +233,7 @@ export default function BookDetailScreen() {
             title={t('description')}
             colors={colors}
             expanded={expandedSections.description}
-            onPress={() => setExpandedSections((current) => ({ ...current, description: !current.description }))}
+            onPress={() => dispatch({ type: 'toggleSection', section: 'description' })}
           />
           {expandedSections.description ? <Text style={[styles.description, { color: colors.textSecondary }]}>{metadata?.description || t('unknown')}</Text> : null}
         </ScrollView>

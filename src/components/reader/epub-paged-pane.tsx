@@ -1,19 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 
 import type { EpubHtmlBook } from '@/lib/epubContent';
 import { readerBackgroundFor, readerForegroundFor } from '@/lib/readerContent';
 import type { ReadingSettings } from '@/types/reader';
-
-export type EpubPagedSeekRequest = {
-  progress: number;
-  nonce: number;
-};
-
-export type EpubPagedResumeRequest = {
-  nonce: number;
-};
 
 type EpubPagedCommand = 'go' | 'jumpTo' | 'jumpToHref' | 'jumpToOffset' | 'seekToProgress' | 'applySettings' | 'resume';
 
@@ -23,37 +14,39 @@ type EpubPagedMessage =
   | { type: 'progress'; progress?: unknown; index?: unknown; href?: unknown; offset?: unknown }
   | { type: 'ready' };
 
-export function EpubPagedPane({
-  book,
-  settings,
-  systemColorScheme,
-  initialIndex,
-  initialOffset,
-  initialProgress,
-  jumpRequest,
-  seekRequest,
-  resumeRequest,
-  turnRequest,
-  onProgress,
-  onTap,
-  onImagePress,
-  onRecoverRequired,
-}: {
+export type EpubPagedPaneHandle = {
+  seekToProgress: (progress: number) => void;
+  resume: () => void;
+  turnPage: (delta: -1 | 1) => void;
+};
+
+type EpubPagedPaneProps = {
+  ref?: React.Ref<EpubPagedPaneHandle>;
   book: EpubHtmlBook;
   settings: ReadingSettings;
   systemColorScheme?: 'light' | 'dark' | null;
   initialIndex: number;
   initialOffset: number;
   initialProgress: number;
-  jumpRequest: { index: number; href?: string; nonce: number } | null;
-  seekRequest: EpubPagedSeekRequest | null;
-  resumeRequest: EpubPagedResumeRequest | null;
-  turnRequest: { delta: -1 | 1; nonce: number } | null;
   onProgress: (progress: number, chapterIndex: number, href: string, chapterOffset: number) => void;
   onTap: (x: number, width: number) => void;
   onImagePress: (uri: string) => void;
   onRecoverRequired: () => void;
-}) {
+};
+
+export function EpubPagedPane({
+  ref,
+  book,
+  settings,
+  systemColorScheme,
+  initialIndex,
+  initialOffset,
+  initialProgress,
+  onProgress,
+  onTap,
+  onImagePress,
+  onRecoverRequired,
+}: EpubPagedPaneProps) {
   const webViewRef = useRef<WebView>(null);
   const [initialSnapshot] = useState(() => ({
     index: initialIndex,
@@ -62,76 +55,63 @@ export function EpubPagedPane({
     settings,
   }));
   const [contentReady, setContentReady] = useState(initialSnapshot.progress <= 0.015);
-  const html = useMemo(
-    () =>
-      createEpubPagedHtml(
-        book,
-        initialSnapshot.settings,
-        systemColorScheme,
-        initialSnapshot.index,
-        initialSnapshot.offset,
-        initialSnapshot.progress
-      ),
-    [book, initialSnapshot, systemColorScheme]
+  const html = createEpubPagedHtml(
+    book,
+    initialSnapshot.settings,
+    systemColorScheme,
+    initialSnapshot.index,
+    initialSnapshot.offset,
+    initialSnapshot.progress
   );
-  const source = useMemo(() => ({ html }), [html]);
+  const source = { html };
 
-  useEffect(() => {
-    if (!jumpRequest) return;
-    if (jumpRequest.href) {
-      injectEpubPagedCommand(webViewRef, 'jumpToHref', [jumpRequest.href, jumpRequest.index]);
-      return;
-    }
-    injectEpubPagedCommand(webViewRef, 'jumpTo', [jumpRequest.index]);
-  }, [jumpRequest]);
+  const seekToProgress = (progress: number) => {
+    injectEpubPagedCommand(webViewRef, 'seekToProgress', [progress]);
+  };
 
-  useEffect(() => {
-    if (!seekRequest) return;
-    injectEpubPagedCommand(webViewRef, 'seekToProgress', [seekRequest.progress]);
-  }, [seekRequest]);
+  const resume = () => {
+    injectEpubPagedCommand(webViewRef, 'resume', [createEpubCssVars(settings, systemColorScheme)]);
+  };
 
-  useEffect(() => {
-    if (!turnRequest) return;
-    injectEpubPagedCommand(webViewRef, 'go', [turnRequest.delta]);
-  }, [turnRequest]);
+  const turnPage = (delta: -1 | 1) => {
+    injectEpubPagedCommand(webViewRef, 'go', [delta]);
+  };
+
+  useImperativeHandle(ref, () => ({
+    seekToProgress,
+    resume,
+    turnPage,
+  }));
 
   useEffect(() => {
     injectEpubPagedCommand(webViewRef, 'applySettings', [createEpubCssVars(settings, systemColorScheme)]);
   }, [settings, systemColorScheme]);
 
-  useEffect(() => {
-    if (!resumeRequest) return;
-    injectEpubPagedCommand(webViewRef, 'resume', [createEpubCssVars(settings, systemColorScheme)]);
-  }, [resumeRequest, settings, systemColorScheme]);
-
-  const handleMessage = useCallback(
-    (event: WebViewMessageEvent) => {
-      const payload = parseEpubPagedMessage(event.nativeEvent.data);
-      if (!payload) return;
-      if (payload.type === 'tap') {
-        onTap(Number(payload.x), Number(payload.width));
-        return;
-      }
-      if (payload.type === 'image' && typeof payload.src === 'string') {
-        onImagePress(payload.src);
-        return;
-      }
-      if (payload.type === 'ready') {
-        setContentReady(true);
-        return;
-      }
-      if (payload.type === 'progress') {
-        setContentReady(true);
-        onProgress(
-          clamp(Number(payload.progress), 0, 1),
-          Number(payload.index) || 0,
-          String(payload.href || ''),
-          clamp(Number(payload.offset), 0, 1)
-        );
-      }
-    },
-    [onImagePress, onProgress, onTap]
-  );
+  const handleMessage = (event: WebViewMessageEvent) => {
+    const payload = parseEpubPagedMessage(event.nativeEvent.data);
+    if (!payload) return;
+    if (payload.type === 'tap') {
+      onTap(Number(payload.x), Number(payload.width));
+      return;
+    }
+    if (payload.type === 'image' && typeof payload.src === 'string') {
+      onImagePress(payload.src);
+      return;
+    }
+    if (payload.type === 'ready') {
+      setContentReady(true);
+      return;
+    }
+    if (payload.type === 'progress') {
+      setContentReady(true);
+      onProgress(
+        clamp(Number(payload.progress), 0, 1),
+        Number(payload.index) || 0,
+        String(payload.href || ''),
+        clamp(Number(payload.offset), 0, 1)
+      );
+    }
+  };
 
   return (
     <View style={styles.webViewReaderHost}>
@@ -169,7 +149,7 @@ function injectEpubPagedCommand(webViewRef: React.RefObject<WebView | null>, com
 
 function createEpubPagedCommandScript(command: EpubPagedCommand, args: unknown[]) {
   return `
-    (function () {
+    void (function () {
       var args = ${JSON.stringify(args)};
       function run() {
         var api = window.PointReader;
@@ -177,8 +157,12 @@ function createEpubPagedCommandScript(command: EpubPagedCommand, args: unknown[]
         api[${JSON.stringify(command)}].apply(api, args);
         return true;
       }
-      if (!run()) setTimeout(run, 0);
-    })();
+      if (!run()) {
+        setTimeout(function () {
+          run();
+        }, 0);
+      }
+    }());
     true;
   `;
 }
@@ -280,9 +264,34 @@ body { position: fixed; inset: 0; touch-action: pan-y; }
     section.id = 'chapter-' + index;
     section.setAttribute('data-index', String(index));
     section.setAttribute('data-href', chapter.href);
-    section.innerHTML = chapter.html;
+    section.appendChild(createChapterFragment(chapter.html));
     applyReaderStylesToSection(section);
     return section;
+  }
+
+  function createChapterFragment(rawHtml) {
+    var doc = new DOMParser().parseFromString(String(rawHtml || ''), 'text/html');
+    doc.querySelectorAll('script, iframe, object, embed, link, meta, base, form, input, button, textarea, select').forEach(function(node) {
+      node.remove();
+    });
+    doc.body.querySelectorAll('*').forEach(function(node) {
+      Array.from(node.attributes).forEach(function(attribute) {
+        var name = attribute.name.toLowerCase();
+        var value = attribute.value.trim();
+        if (name.indexOf('on') === 0 || name === 'srcdoc') {
+          node.removeAttribute(attribute.name);
+          return;
+        }
+        if ((name === 'href' || name === 'src') && /^(?:javascript|vbscript):/i.test(value)) {
+          node.removeAttribute(attribute.name);
+        }
+      });
+    });
+    var fragment = document.createDocumentFragment();
+    while (doc.body.firstChild) {
+      fragment.appendChild(doc.body.firstChild);
+    }
+    return fragment;
   }
 
   function applyReaderStylesToSection(section) {
@@ -625,7 +634,7 @@ const styles = StyleSheet.create({
     opacity: 0,
   },
   epubRestoreOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center',
   },

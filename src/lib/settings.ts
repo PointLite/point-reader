@@ -24,7 +24,7 @@ export const defaultReadingSettings: ReadingSettings = {
   einkOptimization: false,
 };
 
-export const defaultSortState: SortState = {
+const defaultSortState: SortState = {
   field: 'title',
   direction: 'asc',
 };

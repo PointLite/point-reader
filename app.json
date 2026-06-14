@@ -2,11 +2,17 @@
   "expo": {
     "name": "Point Reader",
     "slug": "point-reader",
-    "version": "1.0.0",
+    "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "pointreader",
     "userInterfaceStyle": "automatic",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/e76bb3d3-f4c7-446b-8358-7d33a6d9cca3"
+    },
     "ios": {
       "bundleIdentifier": "com.agur145.pointreader"
     },
@@ -40,7 +46,8 @@
       ],
       "expo-sqlite",
       "@config-plugins/react-native-blob-util",
-      "@config-plugins/react-native-pdf"
+      "@config-plugins/react-native-pdf",
+      "expo-image"
     ],
     "experiments": {
       "typedRoutes": true,

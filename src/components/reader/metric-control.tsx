@@ -1,5 +1,5 @@
 import { type LucideIcon } from 'lucide-react-native';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
@@ -35,7 +35,7 @@ export function ReaderMetricControl({
 }) {
   const { t } = useTranslation();
   const [trackWidth, setTrackWidth] = useState(0);
-  const [localValue, setLocalValue] = useState(value);
+  const [localValue, setLocalValue] = useReducer((_current: number, next: number) => next, value);
   const localValueRef = useRef(value);
   const emittedValueRef = useRef(value);
   const dragging = useRef(false);
@@ -53,74 +53,53 @@ export function ReaderMetricControl({
     setLocalValue(value);
   }, [value]);
 
-  const normalizeValue = useCallback(
-    (rawValue: number) => {
-      const multiplier = Math.round(1 / step);
-      return clamp(Math.round(rawValue * multiplier) / multiplier, min, max);
-    },
-    [max, min, step]
-  );
+  const normalizeValue = (rawValue: number) => {
+    const multiplier = Math.round(1 / step);
+    return clamp(Math.round(rawValue * multiplier) / multiplier, min, max);
+  };
 
-  const emitValue = useCallback(
-    (nextValue: number) => {
-      if (Object.is(emittedValueRef.current, nextValue)) return;
-      emittedValueRef.current = nextValue;
-      onValue(nextValue);
-    },
-    [onValue]
-  );
+  const emitValue = (nextValue: number) => {
+    if (Object.is(emittedValueRef.current, nextValue)) return;
+    emittedValueRef.current = nextValue;
+    onValue(nextValue);
+  };
 
-  const setDraftValue = useCallback(
-    (nextValue: number, emit = false) => {
-      const normalized = normalizeValue(nextValue);
-      localValueRef.current = normalized;
-      setLocalValue(normalized);
-      if (emit) emitValue(normalized);
-    },
-    [emitValue, normalizeValue]
-  );
+  const setDraftValue = (nextValue: number, emit = false) => {
+    const normalized = normalizeValue(nextValue);
+    localValueRef.current = normalized;
+    setLocalValue(normalized);
+    if (emit) emitValue(normalized);
+  };
 
-  const commitValue = useCallback(
-    (nextValue?: number) => {
-      const normalized = normalizeValue(nextValue ?? localValueRef.current);
-      localValueRef.current = normalized;
-      emittedValueRef.current = normalized;
-      setLocalValue(normalized);
-      onValue(normalized);
-    },
-    [normalizeValue, onValue]
-  );
+  const commitValue = (nextValue?: number) => {
+    const normalized = normalizeValue(nextValue ?? localValueRef.current);
+    localValueRef.current = normalized;
+    emittedValueRef.current = normalized;
+    setLocalValue(normalized);
+    onValue(normalized);
+  };
 
-  const updateValue = useCallback(
-    (direction: -1 | 1) => {
-      const multiplier = Math.round(1 / step);
-      const next = Math.round((localValueRef.current + direction * step) * multiplier) / multiplier;
-      commitValue(clamp(next, min, max));
-    },
-    [commitValue, max, min, step]
-  );
+  const updateValue = (direction: -1 | 1) => {
+    const multiplier = Math.round(1 / step);
+    const next = Math.round((localValueRef.current + direction * step) * multiplier) / multiplier;
+    commitValue(clamp(next, min, max));
+  };
 
-  const updateValueFromTrackX = useCallback(
-    (x: number) => {
-      if (!trackWidth) return;
-      const ratio = clamp((x - thumbWidth / 2) / travelWidth, 0, 1);
-      setDraftValue(min + ratio * (max - min), true);
-    },
-    [max, min, setDraftValue, thumbWidth, trackWidth, travelWidth]
-  );
+  const updateValueFromTrackX = (x: number) => {
+    if (!trackWidth) return;
+    const ratio = clamp((x - thumbWidth / 2) / travelWidth, 0, 1);
+    setDraftValue(min + ratio * (max - min), true);
+  };
 
-  const updateControlPageX = useCallback(() => {
+  const updateControlPageX = () => {
     controlRef.current?.measureInWindow((x) => {
       controlPageX.current = x;
     });
-  }, []);
+  };
 
-  const updateValueFromPageX = useCallback(
-    (pageX: number) => {
-      updateValueFromTrackX(pageX - controlPageX.current);
-    },
-    [updateValueFromTrackX]
-  );
+  const updateValueFromPageX = (pageX: number) => {
+    updateValueFromTrackX(pageX - controlPageX.current);
+  };
 
   return (
     <View
@@ -172,7 +151,7 @@ export function ReaderMetricControl({
         ]}
         style={[
           styles.metricThumb,
-          { borderColor: colors.backgroundElement, backgroundColor: colors.surface, shadowColor: colors.text },
+          { borderColor: colors.backgroundElement, backgroundColor: colors.surface, boxShadow: `0 4px 8px ${colors.text}14` },
           compact && styles.metricThumbCompact,
           trackWidth > 0 && { left: thumbLeft, width: thumbWidth },
         ]}>
@@ -203,7 +182,7 @@ const styles = StyleSheet.create({
     borderRadius: 23,
   },
   metricTrackLabels: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     paddingHorizontal: Spacing.three,
     flexDirection: 'row',
     alignItems: 'center',
@@ -237,11 +216,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     flexDirection: 'row',
     gap: Spacing.one,
-    shadowColor: Colors.light.text,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    boxShadow: '0 4px 8px rgba(28,25,23,0.08)',
   },
   metricThumbCompact: {
     minWidth: 48,

@@ -1,5 +1,5 @@
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useColorScheme } from 'react-native';
 
 import { Colors } from '@/constants/theme';
@@ -8,7 +8,7 @@ import type { ReaderColorScheme } from '@/types/reader';
 
 export type AppColors = Record<keyof typeof Colors.light, string>;
 
-export function resolveAppScheme(colorScheme: ReaderColorScheme, systemScheme: 'light' | 'dark') {
+function resolveAppScheme(colorScheme: ReaderColorScheme, systemScheme: 'light' | 'dark') {
   if (colorScheme === 'system') return systemScheme;
   return colorScheme;
 }
@@ -19,7 +19,7 @@ export function useAppTheme() {
   const [colorScheme, setColorScheme] = useState<ReaderColorScheme>(defaultReadingSettings.colorScheme);
 
   useFocusEffect(
-    useCallback(() => {
+    () => {
       let mounted = true;
       loadReadingSettings().then((settings) => {
         if (mounted) setColorScheme(settings.colorScheme);
@@ -27,12 +27,10 @@ export function useAppTheme() {
       return () => {
         mounted = false;
       };
-    }, [])
+    }
   );
 
-  return useMemo(() => {
-    return appThemeFor(colorScheme, systemScheme);
-  }, [colorScheme, systemScheme]);
+  return appThemeFor(colorScheme, systemScheme);
 }
 
 export function appThemeFor(colorScheme: ReaderColorScheme, systemScheme: 'light' | 'dark') {

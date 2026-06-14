@@ -16,11 +16,10 @@ import {
   Trash2,
   X,
 } from 'lucide-react-native';
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useReducer, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Animated,
   FlatList,
   Modal,
   Pressable,
@@ -31,6 +30,15 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import Animated, {
+  cancelAnimation,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ToastViewport, useToast } from '@/components/app-toast';
@@ -67,6 +75,48 @@ type BrowseState = {
   history: { href?: string; label: string }[];
 };
 
+type WebDavScreenState = {
+  directories: WebDavDirectory[];
+  entries: WebDavEntry[];
+  selectedHrefs: string[];
+  browseState: BrowseState | null;
+  modalOpen: boolean;
+  sortOpen: boolean;
+  sortMenuFrame: { x: number; y: number; width: number; height: number } | null;
+  editingDirectory: WebDavDirectory | null;
+  loading: boolean;
+  sort: WebDavSortState;
+  form: { name: string; url: string; username: string; password: string };
+  urlInputInvalid: boolean;
+};
+
+const emptyDirectoryForm = { name: '', url: '', username: '', password: '' };
+
+const initialWebDavScreenState: WebDavScreenState = {
+  directories: [],
+  entries: [],
+  selectedHrefs: [],
+  browseState: null,
+  modalOpen: false,
+  sortOpen: false,
+  sortMenuFrame: null,
+  editingDirectory: null,
+  loading: false,
+  sort: defaultWebDavSort,
+  form: emptyDirectoryForm,
+  urlInputInvalid: false,
+};
+
+type WebDavScreenAction = Partial<WebDavScreenState> | ((state: WebDavScreenState) => Partial<WebDavScreenState>);
+
+function webDavScreenReducer(state: WebDavScreenState, action: WebDavScreenAction): WebDavScreenState {
+  return { ...state, ...(typeof action === 'function' ? action(state) : action) };
+}
+
+function resolveStateAction<T>(action: React.SetStateAction<T>, current: T): T {
+  return typeof action === 'function' ? (action as (value: T) => T)(current) : action;
+}
+
 function configFor(directory: WebDavDirectory): WebDavConfig {
   return {
     url: directory.url,
@@ -80,51 +130,67 @@ function closeToHome() {
   router.replace('/');
 }
 
-export default function WebDavScreen() {
+function useWebDavScreenController() {
   const { width, height } = useWindowDimensions();
   const { t } = useTranslation();
   const showToast = useToast();
   const { colors } = useAppTheme();
   const einkOptimization = useEinkOptimization();
-  const [directories, setDirectories] = useState<WebDavDirectory[]>([]);
-  const [entries, setEntries] = useState<WebDavEntry[]>([]);
-  const [selectedHrefs, setSelectedHrefs] = useState<string[]>([]);
-  const [browseState, setBrowseState] = useState<BrowseState | null>(null);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [sortOpen, setSortOpen] = useState(false);
-  const [sortMenuFrame, setSortMenuFrame] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
-  const [editingDirectory, setEditingDirectory] = useState<WebDavDirectory | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [sort, setSort] = useState<WebDavSortState>(defaultWebDavSort);
-  const [form, setForm] = useState({ name: '', url: '', username: '', password: '' });
-  const [urlInputInvalid, setUrlInputInvalid] = useState(false);
+  const [screenState, setScreenState] = useReducer(webDavScreenReducer, initialWebDavScreenState);
+  const {
+    directories,
+    entries,
+    selectedHrefs,
+    browseState,
+    modalOpen,
+    sortOpen,
+    sortMenuFrame,
+    editingDirectory,
+    loading,
+    sort,
+    form,
+    urlInputInvalid,
+  } = screenState;
+  const setDirectories = (value: React.SetStateAction<WebDavDirectory[]>) =>
+    setScreenState((current) => ({ directories: resolveStateAction(value, current.directories) }));
+  const setEntries = (value: React.SetStateAction<WebDavEntry[]>) =>
+    setScreenState((current) => ({ entries: resolveStateAction(value, current.entries) }));
+  const setSelectedHrefs = (value: React.SetStateAction<string[]>) =>
+    setScreenState((current) => ({ selectedHrefs: resolveStateAction(value, current.selectedHrefs) }));
+  const setBrowseState = (value: React.SetStateAction<BrowseState | null>) =>
+    setScreenState((current) => ({ browseState: resolveStateAction(value, current.browseState) }));
+  const setModalOpen = (modalOpen: boolean) => setScreenState({ modalOpen });
+  const setSortOpen = (sortOpen: boolean) => setScreenState({ sortOpen });
+  const setSortMenuFrame = (sortMenuFrame: WebDavScreenState['sortMenuFrame']) => setScreenState({ sortMenuFrame });
+  const setEditingDirectory = (editingDirectory: WebDavDirectory | null) => setScreenState({ editingDirectory });
+  const setLoading = (loading: boolean) => setScreenState({ loading });
+  const setSort = (sort: WebDavSortState) => setScreenState({ sort });
+  const setForm = (value: React.SetStateAction<WebDavScreenState['form']>) =>
+    setScreenState((current) => ({ form: resolveStateAction(value, current.form) }));
+  const setUrlInputInvalid = (urlInputInvalid: boolean) => setScreenState({ urlInputInvalid });
   const navigationRequestRef = useRef(0);
   const sortButtonRef = useRef<View>(null);
   const webDavImport = useWebDavImport();
   const importing = webDavImport.status === 'running';
-  const selectedHrefSet = useMemo(() => new Set(selectedHrefs), [selectedHrefs]);
+  const selectedHrefSet = new Set(selectedHrefs);
 
-  const selectedEntries = useMemo(
-    () => entries.filter((entry) => selectedHrefSet.has(entry.href)),
-    [entries, selectedHrefSet]
-  );
-  const sortedEntries = useMemo(() => sortWebDavEntries(entries, sort), [entries, sort]);
-
-  const loadDirectories = useCallback(async () => {
-    try {
-      const raw = await AsyncStorage.getItem(WEBDAV_DIRECTORIES_KEY);
-      setDirectories(raw ? JSON.parse(raw) : []);
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : t('operationFailed'));
-    }
-  }, [showToast, t]);
+  const selectedEntries = entries.filter((entry) => selectedHrefSet.has(entry.href));
+  const sortedEntries = sortWebDavEntries(entries, sort);
 
   useEffect(() => {
+    async function loadDirectories() {
+      try {
+        const raw = await AsyncStorage.getItem(WEBDAV_DIRECTORIES_KEY);
+        setDirectories(raw ? JSON.parse(raw) : []);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : t('operationFailed'));
+      }
+    }
     const timer = setTimeout(() => {
       void loadDirectories();
     }, 0);
     return () => clearTimeout(timer);
-  }, [loadDirectories]);
+  }, [showToast, t]);
 
   useEffect(() => {
     let mounted = true;
@@ -325,145 +391,115 @@ export default function WebDavScreen() {
     });
   };
 
+  return {
+    width,
+    height,
+    colors,
+    einkOptimization,
+    directories,
+    browseState,
+    modalOpen,
+    sortOpen,
+    sortMenuFrame,
+    editingDirectory,
+    loading,
+    sort,
+    form,
+    urlInputInvalid,
+    sortButtonRef,
+    webDavImport,
+    importing,
+    selectedHrefSet,
+    selectedEntries,
+    sortedEntries,
+    goBack,
+    toggleSelected,
+    openAddDirectory,
+    openEditDirectory,
+    closeDirectoryModal,
+    saveDirectory,
+    deleteDirectory,
+    importSelection,
+    applySort,
+    openSortMenu,
+    openDirectory,
+    openEntry,
+    setSortOpen,
+    setForm,
+    setUrlInputInvalid,
+  };
+}
+
+export default function WebDavScreen() {
+  const {
+    width,
+    height,
+    colors,
+    einkOptimization,
+    directories,
+    browseState,
+    modalOpen,
+    sortOpen,
+    sortMenuFrame,
+    editingDirectory,
+    loading,
+    sort,
+    form,
+    urlInputInvalid,
+    sortButtonRef,
+    webDavImport,
+    importing,
+    selectedHrefSet,
+    selectedEntries,
+    sortedEntries,
+    goBack,
+    toggleSelected,
+    openAddDirectory,
+    openEditDirectory,
+    closeDirectoryModal,
+    saveDirectory,
+    deleteDirectory,
+    importSelection,
+    applySort,
+    openSortMenu,
+    openDirectory,
+    openEntry,
+    setSortOpen,
+    setForm,
+    setUrlInputInvalid,
+  } = useWebDavScreenController();
+
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: colors.background }]}>
-      <View style={styles.topBar}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t('back')}
-          accessibilityState={{ disabled: loading }}
-          disabled={loading}
-          onPress={goBack}
-          style={[styles.iconButton, { borderColor: colors.border, backgroundColor: colors.surface }, loading && styles.disabledControl]}>
-          <ChevronLeft size={24} color={colors.text} />
-        </Pressable>
-        <View style={styles.titleCopy}>
-          <Text style={[styles.title, { color: colors.text }]}>{browseState ? browseState.directory.name : 'WebDAV'}</Text>
-          {browseState ? (
-            <Text style={[styles.subtitle, { color: colors.textSecondary }]} numberOfLines={1}>
-              {browseState.label}
-            </Text>
-          ) : null}
-        </View>
-        {browseState ? (
-          <View style={styles.browseActions}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t('closeWebdavBrowse')}
-              disabled={loading}
-              onPress={closeToHome}
-              style={({ pressed }) => [
-                styles.iconButton,
-                { borderColor: colors.border, backgroundColor: colors.surface },
-                loading && styles.disabledControl,
-                pressed && styles.pressed,
-              ]}>
-              <X size={22} color={colors.text} />
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t('importSelected')}
-              disabled={selectedEntries.length === 0 || importing || loading}
-              onPress={importSelection}
-              style={({ pressed }) => [
-                styles.actionButton,
-                { backgroundColor: colors.accent },
-                (selectedEntries.length === 0 || loading) && styles.actionButtonDisabled,
-                pressed && styles.pressed,
-              ]}>
-              {importing ? <ActivityIndicator color={colors.surface} /> : <Download size={20} color={colors.surface} />}
-              <Text style={[styles.actionButtonText, { color: colors.surface }]}>{t('import')}</Text>
-            </Pressable>
-          </View>
-        ) : (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t('addDirectory')}
-              disabled={loading || importing}
-              onPress={openAddDirectory}
-              style={({ pressed }) => [
-                styles.iconButton,
-                { borderColor: colors.border, backgroundColor: colors.surface },
-                (loading || importing) && styles.disabledControl,
-                pressed && styles.pressed,
-              ]}>
-            <Plus size={24} color={colors.text} />
-          </Pressable>
-        )}
-      </View>
+      <WebDavTopBar
+        colors={colors}
+        browseState={browseState}
+        loading={loading}
+        importing={importing}
+        selectedCount={selectedEntries.length}
+        onBack={goBack}
+        onAddDirectory={openAddDirectory}
+        onImportSelection={importSelection}
+      />
 
-      {browseState ? (
-        <View style={styles.listSection}>
-          <View style={styles.fixedSectionHeader}>
-            <View style={styles.browserTitleRow}>
-              <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('directoryContents')}</Text>
-              <View ref={sortButtonRef}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={t('sort')}
-                  disabled={loading}
-                  onPress={openSortMenu}
-                  style={({ pressed }) => [
-                    styles.sortHeaderButton,
-                    { borderColor: colors.border, backgroundColor: colors.surface },
-                    loading && styles.disabledControl,
-                    pressed && styles.pressed,
-                  ]}>
-                  <SlidersHorizontal size={20} color={colors.text} />
-                </Pressable>
-              </View>
-            </View>
-            <Text style={[styles.browserMeta, { color: colors.textSecondary }]}>
-              {t('selectedItems', { count: selectedEntries.length })}
-              {importing ? t('importingProgress', { completed: webDavImport.completed, total: webDavImport.total }) : ''}
-            </Text>
-          </View>
-          <FlatList
-            data={sortedEntries}
-            keyExtractor={(item) => item.href}
-            style={styles.scrollList}
-            contentContainerStyle={styles.listContent}
-            ListEmptyComponent={
-              <EmptyState colors={colors} loading={loading} text={loading ? t('readingDirectory') : t('emptyDirectory')} />
-            }
-            renderItem={({ item }) => (
-              <WebDavEntryRow
-                entry={item}
-                colors={colors}
-                selected={selectedHrefSet.has(item.href)}
-                disabled={importing || loading}
-                onToggle={() => toggleSelected(item.href)}
-                onPress={() => openEntry(item)}
-              />
-            )}
-          />
-        </View>
-      ) : (
-        <View style={styles.listSection}>
-          <View style={styles.fixedSectionHeader}>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('myDirectories')}</Text>
-          </View>
-          <FlatList
-            data={directories}
-            keyExtractor={(item) => item.id}
-            style={styles.scrollList}
-            contentContainerStyle={styles.listContent}
-            ListEmptyComponent={
-              <EmptyState colors={colors} loading={false} text={t('emptyDirectories')} />
-            }
-            renderItem={({ item }) => (
-              <DirectoryCard
-                directory={item}
-                colors={colors}
-                disabled={loading || importing}
-                onPress={() => openDirectory(item)}
-                onEdit={() => openEditDirectory(item)}
-                onDelete={() => deleteDirectory(item)}
-              />
-            )}
-          />
-        </View>
-      )}
+      <WebDavMainList
+        colors={colors}
+        browseState={browseState}
+        loading={loading}
+        importing={importing}
+        importState={webDavImport}
+        selectedCount={selectedEntries.length}
+        selectedHrefSet={selectedHrefSet}
+        sortedEntries={sortedEntries}
+        directories={directories}
+        sortButtonRef={sortButtonRef}
+        onOpenSort={openSortMenu}
+        onToggleEntry={toggleSelected}
+        onOpenEntry={openEntry}
+        onOpenDirectory={openDirectory}
+        onEditDirectory={openEditDirectory}
+        onDeleteDirectory={deleteDirectory}
+      />
 
       {loading ? <DirectoryLoadingOverlay colors={colors} /> : null}
 
@@ -494,6 +530,210 @@ export default function WebDavScreen() {
         onSave={saveDirectory}
       />
     </SafeAreaView>
+  );
+}
+
+function WebDavMainList({
+  colors,
+  browseState,
+  loading,
+  importing,
+  importState,
+  selectedCount,
+  selectedHrefSet,
+  sortedEntries,
+  directories,
+  sortButtonRef,
+  onOpenSort,
+  onToggleEntry,
+  onOpenEntry,
+  onOpenDirectory,
+  onEditDirectory,
+  onDeleteDirectory,
+}: {
+  colors: AppColors;
+  browseState: BrowseState | null;
+  loading: boolean;
+  importing: boolean;
+  importState: ReturnType<typeof useWebDavImport>;
+  selectedCount: number;
+  selectedHrefSet: Set<string>;
+  sortedEntries: WebDavEntry[];
+  directories: WebDavDirectory[];
+  sortButtonRef: React.RefObject<View | null>;
+  onOpenSort: () => void;
+  onToggleEntry: (href: string) => void;
+  onOpenEntry: (entry: WebDavEntry) => void;
+  onOpenDirectory: (directory: WebDavDirectory) => void;
+  onEditDirectory: (directory: WebDavDirectory) => void;
+  onDeleteDirectory: (directory: WebDavDirectory) => void;
+}) {
+  const { t } = useTranslation();
+
+  if (browseState) {
+    return (
+      <View style={styles.listSection}>
+        <View style={styles.fixedSectionHeader}>
+          <View style={styles.browserTitleRow}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('directoryContents')}</Text>
+            <View ref={sortButtonRef}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('sort')}
+                disabled={loading}
+                onPress={onOpenSort}
+                style={({ pressed }) => [
+                  styles.sortHeaderButton,
+                  { borderColor: colors.border, backgroundColor: colors.surface },
+                  loading && styles.disabledControl,
+                  pressed && styles.pressed,
+                ]}>
+                <SlidersHorizontal size={20} color={colors.text} />
+              </Pressable>
+            </View>
+          </View>
+          <Text style={[styles.browserMeta, { color: colors.textSecondary }]}>
+            {t('selectedItems', { count: selectedCount })}
+            {importing ? t('importingProgress', { completed: importState.completed, total: importState.total }) : ''}
+          </Text>
+        </View>
+        <FlatList
+          data={sortedEntries}
+          keyExtractor={(item) => item.href}
+          style={styles.scrollList}
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={
+            <EmptyState colors={colors} loading={loading} text={loading ? t('readingDirectory') : t('emptyDirectory')} />
+          }
+          renderItem={({ item }) => (
+            <WebDavEntryRow
+              entry={item}
+              colors={colors}
+              selected={selectedHrefSet.has(item.href)}
+              disabled={importing || loading}
+              onToggle={() => onToggleEntry(item.href)}
+              onPress={() => onOpenEntry(item)}
+            />
+          )}
+        />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.listSection}>
+      <View style={styles.fixedSectionHeader}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('myDirectories')}</Text>
+      </View>
+      <FlatList
+        data={directories}
+        keyExtractor={(item) => item.id}
+        style={styles.scrollList}
+        contentContainerStyle={styles.listContent}
+        ListEmptyComponent={
+          <EmptyState colors={colors} loading={false} text={t('emptyDirectories')} />
+        }
+        renderItem={({ item }) => (
+          <DirectoryCard
+            directory={item}
+            colors={colors}
+            disabled={loading || importing}
+            onPress={() => onOpenDirectory(item)}
+            onEdit={() => onEditDirectory(item)}
+            onDelete={() => onDeleteDirectory(item)}
+          />
+        )}
+      />
+    </View>
+  );
+}
+
+function WebDavTopBar({
+  colors,
+  browseState,
+  loading,
+  importing,
+  selectedCount,
+  onBack,
+  onAddDirectory,
+  onImportSelection,
+}: {
+  colors: AppColors;
+  browseState: BrowseState | null;
+  loading: boolean;
+  importing: boolean;
+  selectedCount: number;
+  onBack: () => void;
+  onAddDirectory: () => void;
+  onImportSelection: () => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <View style={styles.topBar}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('back')}
+        accessibilityState={{ disabled: loading }}
+        disabled={loading}
+        onPress={onBack}
+        style={[styles.iconButton, { borderColor: colors.border, backgroundColor: colors.surface }, loading && styles.disabledControl]}>
+        <ChevronLeft size={24} color={colors.text} />
+      </Pressable>
+      <View style={styles.titleCopy}>
+        <Text style={[styles.title, { color: colors.text }]}>{browseState ? browseState.directory.name : 'WebDAV'}</Text>
+        {browseState ? (
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]} numberOfLines={1}>
+            {browseState.label}
+          </Text>
+        ) : null}
+      </View>
+      {browseState ? (
+        <View style={styles.browseActions}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t('closeWebdavBrowse')}
+            disabled={loading}
+            onPress={closeToHome}
+            style={({ pressed }) => [
+              styles.iconButton,
+              { borderColor: colors.border, backgroundColor: colors.surface },
+              loading && styles.disabledControl,
+              pressed && styles.pressed,
+            ]}>
+            <X size={22} color={colors.text} />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t('importSelected')}
+            disabled={selectedCount === 0 || importing || loading}
+            onPress={onImportSelection}
+            style={({ pressed }) => [
+              styles.actionButton,
+              { backgroundColor: colors.accent },
+              (selectedCount === 0 || loading) && styles.actionButtonDisabled,
+              pressed && styles.pressed,
+            ]}>
+            {importing ? <ActivityIndicator color={colors.surface} /> : <Download size={20} color={colors.surface} />}
+            <Text style={[styles.actionButtonText, { color: colors.surface }]}>{t('import')}</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t('addDirectory')}
+          disabled={loading || importing}
+          onPress={onAddDirectory}
+          style={({ pressed }) => [
+            styles.iconButton,
+            { borderColor: colors.border, backgroundColor: colors.surface },
+            (loading || importing) && styles.disabledControl,
+            pressed && styles.pressed,
+          ]}>
+          <Plus size={24} color={colors.text} />
+        </Pressable>
+      )}
+    </View>
   );
 }
 
@@ -617,7 +857,7 @@ function SortModal({
   return (
     <Modal visible={visible} transparent animationType={modalAnimationType(einkOptimization)} onRequestClose={onClose}>
       <View style={styles.sortModalLayer}>
-        <Pressable accessibilityRole="button" accessibilityLabel={t('closeSort')} onPress={onClose} style={StyleSheet.absoluteFillObject} />
+        <Pressable accessibilityRole="button" accessibilityLabel={t('closeSort')} onPress={onClose} style={StyleSheet.absoluteFill} />
         <View style={[styles.sortCard, { width: menuWidth, top, right, maxHeight, borderColor: colors.border, backgroundColor: colors.surface }]}>
           <Text style={[styles.sortTitle, { color: colors.text }]}>{t('sort')}</Text>
           {(['name', 'modifiedAt'] as const).map((field) => {
@@ -889,44 +1129,39 @@ function EmptyState({ loading, text, colors }: { loading: boolean; text: string;
   );
 }
 
-const AutoScrollText = memo(function AutoScrollText({
+function AutoScrollText({
   text,
   textStyle,
 }: {
   text: string;
   textStyle: TextStyle | TextStyle[];
 }) {
-  const [translateX] = useState(() => new Animated.Value(0));
-  const [containerWidth, setContainerWidth] = useState(0);
-  const estimatedWidth = useMemo(() => estimateEntryNameWidth(text), [text]);
+  const translateX = useSharedValue(0);
+  const [containerWidth, setContainerWidth] = useReducer((_current: number, next: number) => next, 0);
+  const estimatedWidth = estimateEntryNameWidth(text);
   const [measuredWidth, setMeasuredWidth] = useState(0);
   const contentWidth = Math.max(measuredWidth, estimatedWidth);
   const overflow = Math.max(0, contentWidth - containerWidth);
+  const animatedTextStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: translateX.get() }],
+  }));
 
   useEffect(() => {
-    translateX.stopAnimation();
-    translateX.setValue(0);
+    cancelAnimation(translateX);
+    translateX.set(0);
     if (overflow <= 2) return;
 
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.delay(900),
-        Animated.timing(translateX, {
-          toValue: -overflow,
-          duration: Math.max(2600, overflow * 45),
-          useNativeDriver: true,
-        }),
-        Animated.delay(900),
-        Animated.timing(translateX, {
-          toValue: 0,
-          duration: 1,
-          useNativeDriver: true,
-        }),
-      ])
+    translateX.set(
+      withRepeat(
+        withSequence(
+          withDelay(900, withTiming(-overflow, { duration: Math.max(2600, overflow * 45) })),
+          withDelay(900, withTiming(0, { duration: 1 }))
+        ),
+        -1
+      )
     );
-    animation.start();
     return () => {
-      animation.stop();
+      cancelAnimation(translateX);
     };
   }, [overflow, translateX]);
 
@@ -950,13 +1185,13 @@ const AutoScrollText = memo(function AutoScrollText({
           textStyle,
           styles.autoTextContent,
           contentWidth > 0 && { width: contentWidth },
-          { transform: [{ translateX }] },
+          animatedTextStyle,
         ]}>
         {text}
       </Animated.Text>
     </View>
   );
-});
+}
 
 function normalizeDirectoryUrl(url: string) {
   return url.endsWith('/') ? url : `${url}/`;
@@ -1091,7 +1326,7 @@ const styles = StyleSheet.create({
     opacity: 0.48,
   },
   loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center',
     padding: Spacing.three,

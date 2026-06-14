@@ -10,10 +10,10 @@ export const readerBackgrounds: Record<ReadingSettings['background'], string> = 
 };
 
 export const readerForeground = '#1C1917';
-export const readerNightBackground = '#171717';
-export const readerNightForeground = '#F5F5F4';
+const readerNightBackground = '#171717';
+const readerNightForeground = '#F5F5F4';
 
-export function resolveReaderColorScheme(settings: ReadingSettings, systemScheme?: 'light' | 'dark' | null) {
+function resolveReaderColorScheme(settings: ReadingSettings, systemScheme?: 'light' | 'dark' | null) {
   if (settings.colorScheme === 'system') {
     return systemScheme === 'dark' ? 'dark' : 'light';
   }

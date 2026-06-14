@@ -50,7 +50,7 @@ async function persistRebasedBookUris(book: Book, row: BookRow) {
   );
 }
 
-export async function listBooks(sort: SortState): Promise<Book[]> {
+async function listBooks(sort: SortState): Promise<Book[]> {
   const db = await getDb();
   const direction = sort.direction === 'asc' ? 'ASC' : 'DESC';
   const rows = await db.getAllAsync<BookRow>(
@@ -154,16 +154,16 @@ export async function updateBookProgress(
 
 export async function deleteBooks(ids: string[]) {
   const db = await getDb();
-  for (const id of ids) {
-    const book = await getBook(id);
-    if (book?.fileUri) {
-      await FileSystem.deleteAsync(book.fileUri, { idempotent: true });
-    }
-    if (book?.coverUri) {
-      await FileSystem.deleteAsync(book.coverUri, { idempotent: true });
-    }
-    await db.runAsync('DELETE FROM books WHERE id = ?', id);
-  }
+  await Promise.all(ids.map((id) => deleteBookById(db, id)));
+}
+
+async function deleteBookById(db: Awaited<ReturnType<typeof getDb>>, id: string) {
+  const book = await getBook(id);
+  await Promise.all([
+    book?.fileUri ? FileSystem.deleteAsync(book.fileUri, { idempotent: true }) : Promise.resolve(),
+    book?.coverUri ? FileSystem.deleteAsync(book.coverUri, { idempotent: true }) : Promise.resolve(),
+    db.runAsync('DELETE FROM books WHERE id = ?', id),
+  ]);
 }
 
 export function detectFormat(name: string): BookFormat | null {
@@ -173,11 +173,11 @@ export function detectFormat(name: string): BookFormat | null {
 }
 
 async function backfillMissingEpubMetadata(books: Book[]) {
-  for (const book of books) {
-    if (book.format !== 'epub' || book.coverUri) continue;
+  await Promise.all(books.map(async (book) => {
+    if (book.format !== 'epub' || book.coverUri) return;
     try {
       const metadata = await extractEpubMetadata(book.fileUri, book.id);
-      if (!metadata.coverUri && !metadata.title && !metadata.author) continue;
+      if (!metadata.coverUri && !metadata.title && !metadata.author) return;
       const updated = {
         ...book,
         title: metadata.title || book.title,
@@ -189,5 +189,5 @@ async function backfillMissingEpubMetadata(books: Book[]) {
     } catch {
       // Some EPUBs omit cover metadata; keep the generated fallback cover.
     }
-  }
+  }));
 }

@@ -1,4 +1,5 @@
 import { useFocusEffect, router } from 'expo-router';
+import { Image } from 'expo-image';
 import {
   ArrowDownAZ,
   ArrowUpAZ,
@@ -16,13 +17,11 @@ import {
   Trash2,
   type LucideIcon,
 } from 'lucide-react-native';
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useEffectEvent, useReducer, useRef } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Animated,
   FlatList,
-  Image,
   Modal,
   Pressable,
   StyleSheet,
@@ -31,6 +30,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import Animated, { cancelAnimation, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useToast } from '@/components/app-toast';
@@ -50,6 +50,56 @@ import type { Book, BookGroup, SortField, SortState } from '@/types/reader';
 type FolderItem = BookGroup & { books: Book[] };
 type ShelfItem = { type: 'book'; book: Book } | { type: 'folder'; folder: FolderItem } | { type: 'import' };
 
+type ShelfScreenState = {
+  books: Book[];
+  groups: BookGroup[];
+  activeGroupId: string | null;
+  query: string;
+  loading: boolean;
+  importing: boolean;
+  showImportOptions: boolean;
+  renameGroupOpen: boolean;
+  renameGroupName: string;
+  sort: SortState;
+  showSort: boolean;
+  sortMenuFrame: { x: number; y: number; width: number; height: number } | null;
+  selectedIds: string[];
+  selectedFolderId: string | null;
+};
+
+const initialShelfScreenState: ShelfScreenState = {
+  books: [],
+  groups: [],
+  activeGroupId: null,
+  query: '',
+  loading: true,
+  importing: false,
+  showImportOptions: false,
+  renameGroupOpen: false,
+  renameGroupName: '',
+  sort: { field: 'title', direction: 'asc' },
+  showSort: false,
+  sortMenuFrame: null,
+  selectedIds: [],
+  selectedFolderId: null,
+};
+
+type ShelfScreenAction = Partial<ShelfScreenState> | ((state: ShelfScreenState) => Partial<ShelfScreenState>);
+
+function shelfScreenReducer(state: ShelfScreenState, action: ShelfScreenAction): ShelfScreenState {
+  return { ...state, ...(typeof action === 'function' ? action(state) : action) };
+}
+
+function resolveShelfStateAction<T>(action: React.SetStateAction<T>, current: T): T {
+  return typeof action === 'function' ? (action as (value: T) => T)(current) : action;
+}
+
+function shelfItemKey(item: ShelfItem) {
+  if (item.type === 'book') return item.book.id;
+  if (item.type === 'folder') return `folder-${item.folder.id}`;
+  return 'import-tile';
+}
+
 const sortLabels: Record<SortField, string> = {
   updatedAt: 'shelfSortRecent',
   title: 'shelfSortTitle',
@@ -59,26 +109,48 @@ const sortLabels: Record<SortField, string> = {
 
 const SORT_POPOVER_WIDTH = 156;
 
-export default function ShelfScreen() {
+function useShelfScreenController() {
   const { width, height } = useWindowDimensions();
   const { t, language } = useTranslation();
   const showToast = useToast();
   const { colors } = useAppTheme();
   const einkOptimization = useEinkOptimization();
-  const [books, setBooks] = useState<Book[]>([]);
-  const [groups, setGroups] = useState<BookGroup[]>([]);
-  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [importing, setImporting] = useState(false);
-  const [showImportOptions, setShowImportOptions] = useState(false);
-  const [renameGroupOpen, setRenameGroupOpen] = useState(false);
-  const [renameGroupName, setRenameGroupName] = useState('');
-  const [sort, setSort] = useState<SortState>({ field: 'title', direction: 'asc' });
-  const [showSort, setShowSort] = useState(false);
-  const [sortMenuFrame, setSortMenuFrame] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const [screenState, setScreenState] = useReducer(shelfScreenReducer, initialShelfScreenState);
+  const {
+    books,
+    groups,
+    activeGroupId,
+    query,
+    loading,
+    importing,
+    showImportOptions,
+    renameGroupOpen,
+    renameGroupName,
+    sort,
+    showSort,
+    sortMenuFrame,
+    selectedIds,
+    selectedFolderId,
+  } = screenState;
+  const setBooks = (value: React.SetStateAction<Book[]>) =>
+    setScreenState((current) => ({ books: resolveShelfStateAction(value, current.books) }));
+  const setGroups = (value: React.SetStateAction<BookGroup[]>) =>
+    setScreenState((current) => ({ groups: resolveShelfStateAction(value, current.groups) }));
+  const setActiveGroupId = (value: React.SetStateAction<string | null>) =>
+    setScreenState((current) => ({ activeGroupId: resolveShelfStateAction(value, current.activeGroupId) }));
+  const setQuery = (query: string) => setScreenState({ query });
+  const setLoading = (loading: boolean) => setScreenState({ loading });
+  const setImporting = (importing: boolean) => setScreenState({ importing });
+  const setShowImportOptions = (showImportOptions: boolean) => setScreenState({ showImportOptions });
+  const setRenameGroupOpen = (renameGroupOpen: boolean) => setScreenState({ renameGroupOpen });
+  const setRenameGroupName = (renameGroupName: string) => setScreenState({ renameGroupName });
+  const setSort = (sort: SortState) => setScreenState({ sort });
+  const setShowSort = (showSort: boolean) => setScreenState({ showSort });
+  const setSortMenuFrame = (sortMenuFrame: ShelfScreenState['sortMenuFrame']) => setScreenState({ sortMenuFrame });
+  const setSelectedIds = (value: React.SetStateAction<string[]>) =>
+    setScreenState((current) => ({ selectedIds: resolveShelfStateAction(value, current.selectedIds) }));
+  const setSelectedFolderId = (value: React.SetStateAction<string | null>) =>
+    setScreenState((current) => ({ selectedFolderId: resolveShelfStateAction(value, current.selectedFolderId) }));
   const moreButtonRef = useRef<View>(null);
   const queryRef = useRef('');
   const sortRef = useRef<SortState>({ field: 'title', direction: 'asc' });
@@ -86,19 +158,24 @@ export default function ShelfScreen() {
   const hasLoadedShelfRef = useRef(false);
   const refreshRequestRef = useRef(0);
   const restoredLastReaderRef = useRef(false);
-  const [importSheetProgress] = useState(() => new Animated.Value(0));
-  const importSheetAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
+  const importSheetProgress = useSharedValue(0);
+  const importSheetCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const webDavImport = useWebDavImport();
+  const importSheetStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: 360 * (1 - importSheetProgress.get()) }],
+  }));
+  const clearImportSheetCloseTimer = useEffectEvent(() => {
+    const closeTimer = importSheetCloseTimerRef.current;
+    if (closeTimer) clearTimeout(closeTimer);
+    importSheetCloseTimerRef.current = null;
+  });
 
-  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectedIdSet = new Set(selectedIds);
   const gridGap = Spacing.three;
   const horizontalPadding = Spacing.three * 2;
   const bookWidth = Math.floor((width - horizontalPadding - gridGap * 2) / 3);
-  const activeGroup = useMemo(
-    () => groups.find((group) => group.id === activeGroupId) ?? null,
-    [activeGroupId, groups]
-  );
-  const booksByGroupId = useMemo(() => {
+  const activeGroup = groups.find((group) => group.id === activeGroupId) ?? null;
+  const booksByGroupId = (() => {
     const next = new Map<string, Book[]>();
     for (const book of books) {
       if (!book.groupId) continue;
@@ -110,31 +187,25 @@ export default function ShelfScreen() {
       }
     }
     return next;
-  }, [books]);
-  const folders = useMemo<FolderItem[]>(
-    () => {
-      const next: FolderItem[] = [];
-      for (const group of groups) {
-        const groupBooks = booksByGroupId.get(group.id) ?? [];
-        if (groupBooks.length > 0) {
-          next.push({
+  })();
+  const folders = (() => {
+    const next: FolderItem[] = [];
+    for (const group of groups) {
+      const groupBooks = booksByGroupId.get(group.id) ?? [];
+      if (groupBooks.length > 0) {
+        next.push({
           ...group,
-            books: groupBooks,
-          });
-        }
+          books: groupBooks,
+        });
       }
-      return next;
-    },
-    [booksByGroupId, groups]
-  );
-  const folderSelection = useMemo(
-    () => folders.find((folder) => folder.id === selectedFolderId) ?? null,
-    [folders, selectedFolderId]
-  );
+    }
+    return next;
+  })();
+  const folderSelection = folders.find((folder) => folder.id === selectedFolderId) ?? null;
   const selectionMode = selectedIds.length > 0 || Boolean(folderSelection);
   const bookSelectionMode = selectedIds.length > 0;
   const hasListHeader = Boolean(activeGroup) || webDavImport.status !== 'idle';
-  const shelfItems: ShelfItem[] = useMemo(() => {
+  const shelfItems: ShelfItem[] = (() => {
     if (activeGroupId) {
       const activeBooks: ShelfItem[] = [];
       for (const book of books) {
@@ -156,7 +227,7 @@ export default function ShelfScreen() {
       ...rootBooks,
       { type: 'import' },
     ];
-  }, [activeGroupId, books, folders]);
+  })();
 
   const refresh = useCallback(async (options?: { showLoading?: boolean }) => {
     const requestId = refreshRequestRef.current + 1;
@@ -236,9 +307,10 @@ export default function ShelfScreen() {
 
   useEffect(() => {
     return () => {
-      importSheetAnimationRef.current?.stop();
+      clearImportSheetCloseTimer();
+      cancelAnimation(importSheetProgress);
     };
-  }, []);
+  }, [importSheetProgress]);
 
   const selectedCount = selectedIds.length;
 
@@ -276,7 +348,7 @@ export default function ShelfScreen() {
     await applySort({ ...sort, direction });
   };
 
-  const runLocalImport = useCallback(async () => {
+  const runLocalImport = async () => {
     setImporting(true);
     try {
       await importPickedBooks();
@@ -285,36 +357,32 @@ export default function ShelfScreen() {
       showToast(error instanceof Error ? error.message : t('importFilePickerFailed'));
     }
     setImporting(false);
-  }, [refresh, showToast, t]);
+  };
 
-  const closeImportOptions = useCallback(
-    (afterClose?: () => void) => {
-      if (!showImportOptions) {
-        afterClose?.();
-        return;
-      }
-      if (einkOptimization) {
-        importSheetAnimationRef.current?.stop();
-        importSheetProgress.setValue(1);
-        setShowImportOptions(false);
-        afterClose?.();
-        return;
-      }
-      importSheetAnimationRef.current?.stop();
-      const animation = Animated.timing(importSheetProgress, {
-        toValue: 0,
-        duration: INTERACTION_ANIMATION_MS,
-        useNativeDriver: true,
-      });
-      importSheetAnimationRef.current = animation;
-      animation.start(() => {
-        importSheetAnimationRef.current = null;
-        setShowImportOptions(false);
-        afterClose?.();
-      });
-    },
-    [einkOptimization, importSheetProgress, showImportOptions]
-  );
+  const closeImportOptions = (afterClose?: () => void) => {
+    if (!showImportOptions) {
+      afterClose?.();
+      return;
+    }
+    if (importSheetCloseTimerRef.current) {
+      clearTimeout(importSheetCloseTimerRef.current);
+      importSheetCloseTimerRef.current = null;
+    }
+    if (einkOptimization) {
+      cancelAnimation(importSheetProgress);
+      importSheetProgress.set(1);
+      setShowImportOptions(false);
+      afterClose?.();
+      return;
+    }
+    cancelAnimation(importSheetProgress);
+    importSheetProgress.set(withTiming(0, { duration: INTERACTION_ANIMATION_MS }));
+    importSheetCloseTimerRef.current = setTimeout(() => {
+      importSheetCloseTimerRef.current = null;
+      setShowImportOptions(false);
+      afterClose?.();
+    }, INTERACTION_ANIMATION_MS);
+  };
 
   const onImport = () => {
     animateLayoutIfEnabled(einkOptimization);
@@ -323,49 +391,45 @@ export default function ShelfScreen() {
     });
   };
 
-  const openImportOptions = useCallback(() => {
-    importSheetAnimationRef.current?.stop();
-    importSheetProgress.setValue(einkOptimization ? 1 : 0);
+  const openImportOptions = () => {
+    if (importSheetCloseTimerRef.current) {
+      clearTimeout(importSheetCloseTimerRef.current);
+      importSheetCloseTimerRef.current = null;
+    }
+    cancelAnimation(importSheetProgress);
+    importSheetProgress.set(einkOptimization ? 1 : 0);
     setShowImportOptions(true);
     if (einkOptimization) return;
     requestAnimationFrame(() => {
-      const animation = Animated.timing(importSheetProgress, {
-        toValue: 1,
-        duration: INTERACTION_ANIMATION_MS,
-        useNativeDriver: true,
-      });
-      importSheetAnimationRef.current = animation;
-      animation.start(() => {
-        importSheetAnimationRef.current = null;
-      });
+      importSheetProgress.set(withTiming(1, { duration: INTERACTION_ANIMATION_MS }));
     });
-  }, [einkOptimization, importSheetProgress]);
+  };
 
-  const toggleSelected = useCallback((id: string) => {
+  const toggleSelected = (id: string) => {
     animateLayoutIfEnabled(einkOptimization);
     setSelectedFolderId(null);
     setSelectedIds((current) =>
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
     );
-  }, [einkOptimization]);
+  };
 
-  const selectFolder = useCallback((groupId: string) => {
+  const selectFolder = (groupId: string) => {
     animateLayoutIfEnabled(einkOptimization);
     setSelectedIds([]);
     setSelectedFolderId((current) => (current === groupId ? null : groupId));
-  }, [einkOptimization]);
+  };
 
-  const enterGroup = useCallback((groupId: string) => {
+  const enterGroup = (groupId: string) => {
     setSelectedIds([]);
     setSelectedFolderId(null);
     setActiveGroupId(groupId);
-  }, []);
+  };
 
-  const leaveGroup = useCallback(() => {
+  const leaveGroup = () => {
     setSelectedIds([]);
     setSelectedFolderId(null);
     setActiveGroupId(null);
-  }, []);
+  };
 
   const createGroupSelection = () => {
     if (selectedCount < 2) return;
@@ -463,7 +527,7 @@ export default function ShelfScreen() {
     ]);
   };
 
-  const updateQuery = useCallback(async (text: string) => {
+  const updateQuery = async (text: string) => {
     queryRef.current = text;
     setQuery(text);
     try {
@@ -471,46 +535,132 @@ export default function ShelfScreen() {
     } catch (error) {
       showToast(error instanceof Error ? error.message : t('operationFailed'));
     }
-  }, [showToast, t]);
+  };
 
-  const keyExtractor = useCallback((item: ShelfItem) => {
-    if (item.type === 'book') return item.book.id;
-    if (item.type === 'folder') return `folder-${item.folder.id}`;
-    return 'import-tile';
-  }, []);
+  const renderShelfItem = ({ item }: { item: ShelfItem }) =>
+    item.type === 'import' ? (
+      <ImportTile width={bookWidth} importing={importing} colors={colors} onPress={openImportOptions} />
+    ) : item.type === 'folder' ? (
+      <FolderCard
+        folder={item.folder}
+        width={bookWidth}
+        colors={colors}
+        selected={selectedFolderId === item.folder.id}
+        onPress={() => enterGroup(item.folder.id)}
+        onLongPress={() => selectFolder(item.folder.id)}
+      />
+    ) : (
+      <BookCard
+        book={item.book}
+        width={bookWidth}
+        colors={colors}
+        selected={selectedIdSet.has(item.book.id)}
+        selectionMode={bookSelectionMode}
+        onLongPress={() => toggleSelected(item.book.id)}
+        onPress={() => {
+          if (selectionMode) {
+            toggleSelected(item.book.id);
+          } else {
+            router.push({ pathname: '/reader/[bookId]', params: { bookId: item.book.id } });
+          }
+        }}
+      />
+    );
 
-  const renderShelfItem = useCallback(
-    ({ item }: { item: ShelfItem }) =>
-      item.type === 'import' ? (
-        <ImportTile width={bookWidth} importing={importing} colors={colors} onPress={openImportOptions} />
-      ) : item.type === 'folder' ? (
-        <FolderCard
-          folder={item.folder}
-          width={bookWidth}
-          colors={colors}
-          selected={selectedFolderId === item.folder.id}
-          onPress={() => enterGroup(item.folder.id)}
-          onLongPress={() => selectFolder(item.folder.id)}
-        />
-      ) : (
-        <BookCard
-          book={item.book}
-          width={bookWidth}
-          colors={colors}
-          selected={selectedIdSet.has(item.book.id)}
-          selectionMode={bookSelectionMode}
-          onLongPress={() => toggleSelected(item.book.id)}
-          onPress={() => {
-            if (selectionMode) {
-              toggleSelected(item.book.id);
-            } else {
-              router.push({ pathname: '/reader/[bookId]', params: { bookId: item.book.id } });
-            }
-          }}
-        />
-      ),
-    [bookSelectionMode, bookWidth, colors, enterGroup, importing, openImportOptions, selectFolder, selectedFolderId, selectedIdSet, selectionMode, toggleSelected]
-  );
+  return {
+    activeGroup,
+    activeGroupId,
+    books,
+    closeImportOptions,
+    colors,
+    createGroupSelection,
+    deleteSelection,
+    einkOptimization,
+    folderSelection,
+    gridGap,
+    hasListHeader,
+    height,
+    importSheetStyle,
+    leaveGroup,
+    loading,
+    moreButtonRef,
+    onImport,
+    openRenameGroup,
+    query,
+    renameGroupName,
+    renameGroupOpen,
+    renderShelfItem,
+    saveRenameGroup,
+    selectedCount,
+    selectedIds,
+    selectionMode,
+    setRenameGroupName,
+    setRenameGroupOpen,
+    setShowSort,
+    setSortDirection,
+    setSortField,
+    shelfItems,
+    showImportOptions,
+    showSort,
+    sort,
+    sortMenuFrame,
+    t,
+    toggleSortMenu,
+    ungroupSelectedFolder,
+    ungroupSelection,
+    updateQuery,
+    webDavImport,
+    width,
+  };
+}
+
+export default function ShelfScreen() {
+  const controller = useShelfScreenController();
+  const {
+    activeGroup,
+    activeGroupId,
+    books,
+    closeImportOptions,
+    colors,
+    createGroupSelection,
+    deleteSelection,
+    einkOptimization,
+    folderSelection,
+    gridGap,
+    hasListHeader,
+    height,
+    importSheetStyle,
+    leaveGroup,
+    loading,
+    moreButtonRef,
+    onImport,
+    openRenameGroup,
+    query,
+    renameGroupName,
+    renameGroupOpen,
+    renderShelfItem,
+    saveRenameGroup,
+    selectedCount,
+    selectedIds,
+    selectionMode,
+    setRenameGroupName,
+    setRenameGroupOpen,
+    setShowSort,
+    setSortDirection,
+    setSortField,
+    shelfItems,
+    showImportOptions,
+    showSort,
+    sort,
+    sortMenuFrame,
+    t,
+    toggleSortMenu,
+    ungroupSelectedFolder,
+    ungroupSelection,
+    updateQuery,
+    webDavImport,
+    width,
+  } = controller;
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: colors.background }]}>
@@ -530,7 +680,7 @@ export default function ShelfScreen() {
       ) : (
         <FlatList
           data={shelfItems}
-          keyExtractor={keyExtractor}
+          keyExtractor={shelfItemKey}
           numColumns={3}
           columnWrapperStyle={[styles.gridRow, { gap: gridGap }]}
           contentContainerStyle={[styles.gridContent, selectionMode && styles.listWithSheet]}
@@ -586,7 +736,7 @@ export default function ShelfScreen() {
             accessibilityRole="button"
             accessibilityLabel={t('closeSortMenu')}
             onPress={() => setShowSort(false)}
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
           />
           <View
             style={[
@@ -657,22 +807,13 @@ export default function ShelfScreen() {
             accessibilityRole="button"
             accessibilityLabel={t('closeImportOptions')}
             onPress={() => closeImportOptions()}
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
           />
           <Animated.View
             style={[
               styles.importSheet,
               { borderColor: colors.border, backgroundColor: colors.surface },
-              {
-                transform: [
-                  {
-                    translateY: importSheetProgress.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [360, 0],
-                    }),
-                  },
-                ],
-              },
+              importSheetStyle,
             ]}>
             <Text style={[styles.importSheetTitle, { color: colors.text }]}>{t('addBooks')}</Text>
             <Text style={[styles.importSheetHint, { color: colors.textSecondary }]}>{t('chooseImportSource')}</Text>
@@ -704,7 +845,7 @@ export default function ShelfScreen() {
             accessibilityRole="button"
             accessibilityLabel={t('renameFolder')}
             onPress={() => setRenameGroupOpen(false)}
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
           />
           <View style={[styles.renameCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
             <Text style={[styles.renameTitle, { color: colors.text }]}>{t('renameFolder')}</Text>
@@ -845,7 +986,7 @@ function FolderCard({
           {previews.map((book) => (
             <View key={book.id} style={[styles.folderPreview, { borderColor: colors.border, backgroundColor: colors.background }]}>
               {book.coverUri ? (
-                <Image source={{ uri: book.coverUri }} style={styles.folderPreviewImage} resizeMode="cover" />
+                <Image source={{ uri: book.coverUri }} style={styles.folderPreviewImage} contentFit="cover" />
               ) : (
                 <Folder size={14} color={colors.textSecondary} strokeWidth={2} />
               )}
@@ -902,7 +1043,7 @@ function ImportAction({
   );
 }
 
-const ShelfHeader = memo(function ShelfHeader({
+function ShelfHeader({
   colors,
   query,
   bookCount,
@@ -952,7 +1093,7 @@ const ShelfHeader = memo(function ShelfHeader({
       </View>
     </View>
   );
-});
+}
 
 function ImportTile({
   width,
@@ -1146,7 +1287,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.surface,
     paddingVertical: Spacing.one,
     zIndex: 40,
-    elevation: 6,
+    boxShadow: '0 8px 20px rgba(0,0,0,0.12)',
   },
   sortMenuItem: {
     minHeight: TouchTarget,

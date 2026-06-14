@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useImperativeHandle, useRef, useState } from 'react';
 import { StyleSheet } from 'react-native';
 import Pdf, { type PdfRef } from 'react-native-pdf';
 
@@ -6,35 +6,47 @@ import type { AppColors } from '@/lib/theme';
 import type { Book } from '@/types/reader';
 
 type PdfPaneProps = {
+  ref?: React.Ref<PdfPaneHandle>;
   book: Book;
   colors: AppColors;
-  seekRequest?: { progress: number; nonce: number } | null;
-  turnRequest?: { delta: -1 | 1; nonce: number } | null;
   onProgress: (progress: number, chapter: number, offset: number) => void;
   onToggleToolbar: () => void;
 };
 
-export function PdfPane({ book, colors, seekRequest, turnRequest, onProgress, onToggleToolbar }: PdfPaneProps) {
+export type PdfPaneHandle = {
+  seekToProgress: (progress: number) => void;
+  turnPage: (delta: -1 | 1) => void;
+};
+
+export function PdfPane({ ref, book, colors, onProgress, onToggleToolbar }: PdfPaneProps) {
   const pdfRef = useRef<PdfRef>(null);
   const [initialPage] = useState(() => Math.max(1, book.currentChapter || 1));
-  const source = useMemo(() => ({ uri: book.fileUri }), [book.fileUri]);
-  const [pageCount, setPageCount] = useState(0);
+  const source = { uri: book.fileUri };
+  const pageCountRef = useRef(0);
   const currentPageRef = useRef(initialPage);
 
-  useEffect(() => {
-    if (!seekRequest || pageCount <= 0) return;
-    const targetPage = Math.max(1, Math.min(pageCount, Math.round(seekRequest.progress * Math.max(1, pageCount - 1)) + 1));
-    pdfRef.current?.setPage(targetPage);
-    onProgress(pdfPageToProgress(targetPage, pageCount), targetPage, targetPage);
-  }, [onProgress, pageCount, seekRequest]);
-
-  useEffect(() => {
-    if (!turnRequest || pageCount <= 0) return;
-    const targetPage = Math.max(1, Math.min(pageCount, currentPageRef.current + turnRequest.delta));
+  const seekToProgress = (progress: number) => {
+    const pageCount = pageCountRef.current;
+    if (pageCount <= 0) return;
+    const targetPage = Math.max(1, Math.min(pageCount, Math.round(progress * Math.max(1, pageCount - 1)) + 1));
     pdfRef.current?.setPage(targetPage);
     currentPageRef.current = targetPage;
     onProgress(pdfPageToProgress(targetPage, pageCount), targetPage, targetPage);
-  }, [onProgress, pageCount, turnRequest]);
+  };
+
+  const turnPage = (delta: -1 | 1) => {
+    const pageCount = pageCountRef.current;
+    if (pageCount <= 0) return;
+    const targetPage = Math.max(1, Math.min(pageCount, currentPageRef.current + delta));
+    pdfRef.current?.setPage(targetPage);
+    currentPageRef.current = targetPage;
+    onProgress(pdfPageToProgress(targetPage, pageCount), targetPage, targetPage);
+  };
+
+  useImperativeHandle(ref, () => ({
+    seekToProgress,
+    turnPage,
+  }));
 
   return (
     <Pdf
@@ -43,7 +55,9 @@ export function PdfPane({ book, colors, seekRequest, turnRequest, onProgress, on
       style={[styles.pdf, { backgroundColor: colors.background }]}
       page={initialPage}
       enablePaging={false}
-      onLoadComplete={(total) => setPageCount(total)}
+      onLoadComplete={(total) => {
+        pageCountRef.current = total;
+      }}
       onPageChanged={(page, total) => {
         currentPageRef.current = page;
         onProgress(pdfPageToProgress(page, total), page, page);

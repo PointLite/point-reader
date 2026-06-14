@@ -1,5 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, Image, Modal, StyleSheet, View, useWindowDimensions } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Image } from 'expo-image';
+import { Modal, StyleSheet, View, useWindowDimensions } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 
 import { useTranslation } from '@/lib/i18n';
 import { modalAnimationType } from '@/lib/motion';
@@ -19,9 +21,9 @@ export function ImagePreviewModal({
   const { t } = useTranslation();
   const { width, height } = useWindowDimensions();
   const [imageRatio, setImageRatio] = useState(1);
-  const [scale] = useState(() => new Animated.Value(1));
-  const [translateX] = useState(() => new Animated.Value(0));
-  const [translateY] = useState(() => new Animated.Value(0));
+  const scale = useSharedValue(1);
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
   const scaleValue = useRef(1);
   const offsetValue = useRef({ x: 0, y: 0 });
   const panStart = useRef({ x: 0, y: 0 });
@@ -33,6 +35,13 @@ export function ImagePreviewModal({
   const didDrag = useRef(false);
   const previewWidth = width;
   const previewHeight = Math.max(1, width * imageRatio);
+  const previewImageStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: translateX.get() },
+      { translateY: translateY.get() },
+      { scale: scale.get() },
+    ],
+  }));
 
   useEffect(() => {
     scaleValue.current = 1;
@@ -42,37 +51,21 @@ export function ImagePreviewModal({
     pinchStartScale.current = 1;
     didPinch.current = false;
     didDrag.current = false;
-    scale.setValue(1);
-    translateX.setValue(0);
-    translateY.setValue(0);
+    scale.set(1);
+    translateX.set(0);
+    translateY.set(0);
   }, [scale, translateX, translateY, uri]);
 
-  useEffect(() => {
-    if (!uri) return;
-    Image.getSize(
-      uri,
-      (imageWidth, imageHeight) => {
-        if (imageWidth > 0 && imageHeight > 0) {
-          setImageRatio(imageHeight / imageWidth);
-        }
-      },
-      () => setImageRatio(1)
-    );
-  }, [uri]);
-
-  const setPreviewOffset = useCallback(
-    (x: number, y: number, nextScale?: number) => {
-      const resolvedScale = nextScale ?? scaleValue.current;
-      const maxX = Math.max(0, (previewWidth * resolvedScale - width) / 2);
-      const maxY = Math.max(0, (previewHeight * resolvedScale - height) / 2);
-      const nextX = clamp(x, -maxX, maxX);
-      const nextY = clamp(y, -maxY, maxY);
-      offsetValue.current = { x: nextX, y: nextY };
-      translateX.setValue(nextX);
-      translateY.setValue(nextY);
-    },
-    [height, previewHeight, previewWidth, translateX, translateY, width]
-  );
+  const setPreviewOffset = (x: number, y: number, nextScale?: number) => {
+    const resolvedScale = nextScale ?? scaleValue.current;
+    const maxX = Math.max(0, (previewWidth * resolvedScale - width) / 2);
+    const maxY = Math.max(0, (previewHeight * resolvedScale - height) / 2);
+    const nextX = clamp(x, -maxX, maxX);
+    const nextY = clamp(y, -maxY, maxY);
+    offsetValue.current = { x: nextX, y: nextY };
+    translateX.set(nextX);
+    translateY.set(nextY);
+  };
 
   return (
     <Modal visible={Boolean(uri)} transparent animationType={modalAnimationType(einkOptimization)} onRequestClose={onClose}>
@@ -126,7 +119,7 @@ export function ImagePreviewModal({
             MAX_PREVIEW_SCALE
           );
           scaleValue.current = nextScale;
-          scale.setValue(nextScale);
+          scale.set(nextScale);
           setPreviewOffset(offsetValue.current.x, offsetValue.current.y, nextScale);
         }}
         onResponderRelease={(event) => {
@@ -158,10 +151,20 @@ export function ImagePreviewModal({
               {
                 width: previewWidth,
                 height: previewHeight,
-                transform: [{ translateX }, { translateY }, { scale }],
               },
+              previewImageStyle,
             ]}>
-            <Image source={{ uri }} resizeMode="contain" style={styles.image} />
+            <Image
+              source={{ uri }}
+              contentFit="contain"
+              style={styles.image}
+              onLoad={({ source }) => {
+                if (source.width > 0 && source.height > 0) {
+                  setImageRatio(source.height / source.width);
+                }
+              }}
+              onError={() => setImageRatio(1)}
+            />
           </Animated.View>
         ) : null}
       </View>

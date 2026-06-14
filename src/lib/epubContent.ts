@@ -41,39 +41,43 @@ export async function loadEpubHtmlBook(fileUri: string): Promise<EpubHtmlBook> {
   const spineRefs = toArray<any>(pkg?.spine?.itemref);
   const manifestById = new Map(manifestItems.map((item) => [item.id, item]));
   const css = manifestItems
-    .filter((item) => item['media-type'] === 'text/css' && item.href)
-    .map((item) => readZipText(zip, normalizeZipPath(`${opfDir}${item.href}`)))
+    .flatMap((item) =>
+      item['media-type'] === 'text/css' && item.href
+        ? [readZipText(zip, normalizeZipPath(`${opfDir}${item.href}`))]
+        : []
+    )
     .join('\n');
 
   const toc = readToc(zip, opfDir, manifestItems, pkg?.spine?.toc);
   const tocByHref = new Map(toc.map((item) => [normalizeHrefKey(item.href), item.title]));
 
   const chapters = spineRefs
-    .map((ref, spineIndex) => {
+    .flatMap((ref) => {
       const item = manifestById.get(ref.idref);
-      if (!item?.href || item['media-type'] !== 'application/xhtml+xml') return null;
+      if (!item?.href || item['media-type'] !== 'application/xhtml+xml') return [];
       const href = normalizeZipPath(`${opfDir}${item.href}`);
       const html = readZipText(zip, href);
-      if (!html) return null;
+      if (!html) return [];
       const title = tocByHref.get(normalizeHrefKey(item.href)) ?? tocByHref.get(normalizeHrefKey(href)) ?? '';
       const body = extractBodyHtml(html);
       const rewritten = rewriteResourceLinks(body, zip, href);
-      return {
+      return [{
         id: href,
         title: title.trim(),
         href: item.href,
         html: rewritten,
-      };
-    })
-    .filter((chapter): chapter is EpubHtmlChapter => Boolean(chapter));
+      }];
+    });
 
-  const tocItems = toc
-    .map((item, index) => ({
+  const tocItems = toc.flatMap((item, index) => {
+    const title = item.title.trim();
+    if (!title || !item.href) return [];
+    return [{
       id: `${item.href || index}-${index}`,
-      title: item.title.trim(),
+      title,
       href: item.href,
-    }))
-    .filter((item) => item.title.length > 0 && item.href.length > 0);
+    }];
+  });
 
   return { chapters, toc: tocItems, css };
 }

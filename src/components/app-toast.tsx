@@ -1,4 +1,4 @@
-import React, { createContext, use, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import React, { createContext, use, useEffect, useRef, useState, type ReactNode } from 'react';
 import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
@@ -8,29 +8,29 @@ const ToastMessageContext = createContext<string | null>(null);
 const ToastActionContext = createContext<((message: string) => void) | null>(null);
 const TOAST_DURATION_MS = 1800;
 
+function clearTimer(timerRef: { current: ReturnType<typeof setTimeout> | null }) {
+  if (!timerRef.current) return;
+  clearTimeout(timerRef.current);
+  timerRef.current = null;
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [message, setMessage] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-      }
-    };
+    return () => clearTimer(timerRef);
   }, []);
 
-  const showToast = useCallback((nextMessage: string) => {
+  const showToast = (nextMessage: string) => {
     if (!nextMessage.trim()) return;
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-    }
+    clearTimer(timerRef);
     setMessage(nextMessage);
     timerRef.current = setTimeout(() => {
       setMessage(null);
       timerRef.current = null;
     }, TOAST_DURATION_MS);
-  }, []);
+  };
 
   return (
     <ToastActionContext.Provider value={showToast}>
@@ -64,12 +64,12 @@ export function ToastViewport({ colors }: { colors: AppColors }) {
 
 const styles = StyleSheet.create({
   layer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'flex-end',
     paddingHorizontal: Spacing.three,
     zIndex: 1000,
-    elevation: 1000,
+    boxShadow: '0 18px 36px rgba(0,0,0,0.18)',
   },
   toast: {
     alignSelf: 'center',

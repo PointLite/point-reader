@@ -111,7 +111,7 @@ export async function testWebDavConnection(config: WebDavConfig) {
   await listWebDav(config);
 }
 
-export async function importWebDavEntry(config: WebDavConfig, entry: WebDavEntry): Promise<Book | null> {
+async function importWebDavEntry(config: WebDavConfig, entry: WebDavEntry): Promise<Book | null> {
   if (entry.type === 'directory' || !detectFormat(entry.name)) return null;
   const target = requestUrl(config, entry.href);
   const headers: Record<string, string> = {};
@@ -133,18 +133,21 @@ export async function importWebDavEntries(
   const files: WebDavEntry[] = [];
   const visited = new Set<string>();
 
-  for (const entry of entries) {
-    await collectImportableEntries(config, entry, files, visited);
-  }
+  await Promise.all(entries.map((entry) => collectImportableEntries(config, entry, files, visited)));
 
-  const books: Book[] = [];
-  for (const [index, file] of files.entries()) {
-    const book = await importWebDavEntry(config, file);
-    if (book) books.push(book);
-    onProgress?.(index + 1, files.length, books.length);
-  }
+  let completed = 0;
+  let imported = 0;
+  const results = await Promise.all(
+    files.map(async (file) => {
+      const book = await importWebDavEntry(config, file);
+      completed += 1;
+      if (book) imported += 1;
+      onProgress?.(completed, files.length, imported);
+      return book;
+    })
+  );
 
-  return books;
+  return results.filter((book): book is Book => Boolean(book));
 }
 
 async function collectImportableEntries(
@@ -163,7 +166,5 @@ async function collectImportableEntries(
   }
 
   const children = await listWebDav(config, entry.href);
-  for (const child of children) {
-    await collectImportableEntries(config, child, files, visited);
-  }
+  await Promise.all(children.map((child) => collectImportableEntries(config, child, files, visited)));
 }

@@ -42,11 +42,11 @@ function scheduleClear() {
   }, 4500);
 }
 
-export function getWebDavImportSnapshot() {
+function getWebDavImportSnapshot() {
   return snapshot;
 }
 
-export function subscribeWebDavImport(listener: () => void) {
+function subscribeWebDavImport(listener: () => void) {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);

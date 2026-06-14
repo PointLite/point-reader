@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import en from '@/languages/en.json';
 import zh from '@/languages/zh.json';
@@ -17,20 +17,15 @@ export const supportedAppLanguages = [
   { code: 'en', labelKey: 'languageEn' },
 ] as const satisfies { code: AppLanguage; labelKey: I18nKey }[];
 
-export function resolveAppLanguage(language: AppLanguage, locale = getSystemLocale()): ResolvedLanguage {
+function resolveAppLanguage(language: AppLanguage, locale = getSystemLocale()): ResolvedLanguage {
   return language;
 }
 
-export function getSystemLocale() {
+function getSystemLocale() {
   return Intl.DateTimeFormat().resolvedOptions().locale || 'en';
 }
 
-export function createTranslator(language: AppLanguage) {
-  const resolved = resolveAppLanguage(language);
-  return (key: I18nKey, values?: Record<string, string | number>) => translate(key, values, resolved);
-}
-
-export function translate(
+function translate(
   key: I18nKey,
   values?: Record<string, string | number>,
   resolvedLanguage = resolveAppLanguage(defaultReadingSettings.appLanguage)
@@ -58,9 +53,7 @@ export function useTranslation() {
   }, []);
 
   const language = resolveAppLanguage(appLanguage);
-  const t = useMemo(() => {
-    return (key: I18nKey, values?: Record<string, string | number>) => translate(key, values, language);
-  }, [language]);
+  const t = (key: I18nKey, values?: Record<string, string | number>) => translate(key, values, language);
 
   return { t, language, appLanguage };
 }

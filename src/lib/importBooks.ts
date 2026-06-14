@@ -21,7 +21,7 @@ function guessTitle(name: string) {
   return parts.length > 1 ? parts.slice(1).join(' - ').trim() : cleanName(name);
 }
 
-export async function ensureBookDir() {
+async function ensureBookDir() {
   const info = await FileSystem.getInfoAsync(BOOK_DIR);
   if (!info.exists) {
     await FileSystem.makeDirectoryAsync(BOOK_DIR, { intermediates: true });

@@ -8,8 +8,8 @@ import {
   RotateCw,
   SquareDashed,
 } from 'lucide-react-native';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useReducer, useRef, useState } from 'react';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ReaderMetricControl } from '@/components/reader/metric-control';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
@@ -56,7 +56,7 @@ export function ReaderSheet({
 }) {
   const { t } = useTranslation();
   const resolvedDisabledSheets = disabledSheets ?? EMPTY_DISABLED_SHEETS;
-  const tocListRef = useRef<ScrollView>(null);
+  const tocListRef = useRef<FlatList<ReaderChapter>>(null);
   const themeDisabled = resolvedDisabledSheets.includes('theme');
   const fontDisabled = resolvedDisabledSheets.includes('font');
   const sheetTitle = {
@@ -78,8 +78,10 @@ export function ReaderSheet({
       : -1;
     const targetIndex = hrefIndex >= 0 ? hrefIndex : clamp(currentChapterIndex, 0, chapters.length - 1);
     const timer = setTimeout(() => {
-      tocListRef.current?.scrollTo({
-        y: Math.max(0, targetIndex * TouchTarget - TouchTarget * 2),
+      tocListRef.current?.scrollToIndex({
+        index: targetIndex,
+        viewPosition: 0,
+        viewOffset: TouchTarget * 2,
         animated: false,
       });
     }, 0);
@@ -87,35 +89,48 @@ export function ReaderSheet({
   }, [chapters, currentChapterHref, currentChapterIndex, hasChapters, sheet]);
 
   return (
-    <View style={[styles.sheet, { backgroundColor: colors.surface, shadowColor: colors.text }]}>
+    <View style={[styles.sheet, { backgroundColor: colors.surface, boxShadow: `0 -4px 14px ${colors.text}1F` }]}>
       <View style={[styles.sheetTitleWrap, { borderBottomColor: colors.backgroundElement }]}>
         <Text style={[styles.sheetTitle, { color: colors.text }]}>{sheetTitle}</Text>
       </View>
       {sheet === 'toc' ? (
         hasChapters ? (
-          <ScrollView ref={tocListRef} scrollsToTop={false} style={styles.tocList}>
-            {chapters.map((chapter, index) => {
-            const isCurrent = currentChapterHref
-              ? isSameEpubHref(chapter.href, currentChapterHref)
-              : index === currentChapterIndex;
-            return (
-              <Pressable
-                key={`${chapter.id}-${index}`}
-                accessibilityRole="button"
-                accessibilityLabel={chapter.title}
-                accessibilityState={{ selected: isCurrent }}
-                onPress={() => {
-                  const targetHref = normalizeEpubDisplayHref(chapter.href);
-                  onSelectChapter(resolveChapterIndex?.(targetHref || chapter.href, index) ?? index, targetHref || chapter.href);
-                }}
-                style={[styles.tocItem, { borderBottomColor: colors.backgroundElement }, isCurrent && { backgroundColor: colors.backgroundElement }]}>
-                <Text style={[styles.tocTitle, { color: colors.text }, isCurrent && styles.tocTitleCurrent]} numberOfLines={2}>
-                  {chapter.title}
-                </Text>
-              </Pressable>
-            );
-            })}
-          </ScrollView>
+          <FlatList
+            ref={tocListRef}
+            data={chapters}
+            keyExtractor={(chapter, index) => `${chapter.id}-${index}`}
+            scrollsToTop={false}
+            style={styles.tocList}
+            getItemLayout={(_, index) => ({ length: TouchTarget, offset: TouchTarget * index, index })}
+            onScrollToIndexFailed={({ index }) => {
+              requestAnimationFrame(() => {
+                tocListRef.current?.scrollToOffset({
+                  offset: Math.max(0, index * TouchTarget - TouchTarget * 2),
+                  animated: false,
+                });
+              });
+            }}
+            renderItem={({ item: chapter, index }) => {
+              const isCurrent = currentChapterHref
+                ? isSameEpubHref(chapter.href, currentChapterHref)
+                : index === currentChapterIndex;
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={chapter.title}
+                  accessibilityState={{ selected: isCurrent }}
+                  onPress={() => {
+                    const targetHref = normalizeEpubDisplayHref(chapter.href);
+                    onSelectChapter(resolveChapterIndex?.(targetHref || chapter.href, index) ?? index, targetHref || chapter.href);
+                  }}
+                  style={[styles.tocItem, { borderBottomColor: colors.backgroundElement }, isCurrent && { backgroundColor: colors.backgroundElement }]}>
+                  <Text style={[styles.tocTitle, { color: colors.text }, isCurrent && styles.tocTitleCurrent]} numberOfLines={2}>
+                    {chapter.title}
+                  </Text>
+                </Pressable>
+              );
+            }}
+          />
         ) : (
           <View style={styles.emptyToc}>
             <Text style={[styles.emptyTocText, { color: colors.textSecondary }]}>{t('noChapters')}</Text>
@@ -233,27 +248,21 @@ function ProgressPanel({
     currentProgress.current = progress;
   }, [progress]);
 
-  const commitSeek = useCallback(
-    (nextProgress: number) => {
-      const clampedProgress = clamp(nextProgress, 0, 1);
-      undoProgress.current = currentProgress.current;
-      redoProgress.current = null;
-      currentProgress.current = clampedProgress;
-      setCanUndo(true);
-      setCanRedo(false);
-      onSeek(clampedProgress);
-    },
-    [onSeek]
-  );
+  const commitSeek = (nextProgress: number) => {
+    const clampedProgress = clamp(nextProgress, 0, 1);
+    undoProgress.current = currentProgress.current;
+    redoProgress.current = null;
+    currentProgress.current = clampedProgress;
+    setCanUndo(true);
+    setCanRedo(false);
+    onSeek(clampedProgress);
+  };
 
-  const seekBy = useCallback(
-    (delta: number) => {
-      commitSeek(currentProgress.current + delta);
-    },
-    [commitSeek]
-  );
+  const seekBy = (delta: number) => {
+    commitSeek(currentProgress.current + delta);
+  };
 
-  const undo = useCallback(() => {
+  const undo = () => {
     if (undoProgress.current === null) return;
     redoProgress.current = currentProgress.current;
     const target = undoProgress.current;
@@ -262,9 +271,9 @@ function ProgressPanel({
     setCanUndo(false);
     setCanRedo(true);
     onSeek(target);
-  }, [onSeek]);
+  };
 
-  const redo = useCallback(() => {
+  const redo = () => {
     if (redoProgress.current === null) return;
     undoProgress.current = currentProgress.current;
     const target = redoProgress.current;
@@ -273,19 +282,16 @@ function ProgressPanel({
     setCanUndo(true);
     setCanRedo(false);
     onSeek(target);
-  }, [onSeek]);
+  };
 
-  const jumpChapter = useCallback(
-    (direction: -1 | 1) => {
-      undoProgress.current = currentProgress.current;
-      redoProgress.current = null;
-      setCanUndo(true);
-      setCanRedo(false);
-      if (direction < 0) onPreviousChapter();
-      else onNextChapter();
-    },
-    [onNextChapter, onPreviousChapter]
-  );
+  const jumpChapter = (direction: -1 | 1) => {
+    undoProgress.current = currentProgress.current;
+    redoProgress.current = null;
+    setCanUndo(true);
+    setCanRedo(false);
+    if (direction < 0) onPreviousChapter();
+    else onNextChapter();
+  };
 
   return (
     <View style={styles.progressPanel}>
@@ -338,7 +344,7 @@ export function ProgressToolIcon({ color, backgroundColor }: { color: string; ba
 function ReaderProgressControl({ value, colors, onValue }: { value: number; colors: AppColors; onValue: (value: number) => void }) {
   const { t } = useTranslation();
   const [trackWidth, setTrackWidth] = useState(0);
-  const [localValue, setLocalValue] = useState(value);
+  const [localValue, setLocalValue] = useReducer((_current: number, next: number) => next, value);
   const localValueRef = useRef(value);
   const dragging = useRef(false);
   const controlRef = useRef<View>(null);
@@ -353,32 +359,26 @@ function ReaderProgressControl({ value, colors, onValue }: { value: number; colo
     setLocalValue(value);
   }, [value]);
 
-  const updateValueFromTrackX = useCallback(
-    (x: number) => {
-      if (!trackWidth) return;
-      const ratio = clamp((x - thumbWidth / 2) / travelWidth, 0, 1);
-      localValueRef.current = ratio;
-      setLocalValue(ratio);
-    },
-    [thumbWidth, trackWidth, travelWidth]
-  );
+  const updateValueFromTrackX = (x: number) => {
+    if (!trackWidth) return;
+    const ratio = clamp((x - thumbWidth / 2) / travelWidth, 0, 1);
+    localValueRef.current = ratio;
+    setLocalValue(ratio);
+  };
 
-  const updateControlPageX = useCallback(() => {
+  const updateControlPageX = () => {
     controlRef.current?.measureInWindow((x) => {
       controlPageX.current = x;
     });
-  }, []);
+  };
 
-  const updateValueFromPageX = useCallback(
-    (pageX: number) => {
-      updateValueFromTrackX(pageX - controlPageX.current);
-    },
-    [updateValueFromTrackX]
-  );
+  const updateValueFromPageX = (pageX: number) => {
+    updateValueFromTrackX(pageX - controlPageX.current);
+  };
 
-  const commit = useCallback(() => {
+  const commit = () => {
     onValue(clamp(localValueRef.current, 0, 1));
-  }, [onValue]);
+  };
 
   return (
     <View
@@ -423,7 +423,7 @@ function ReaderProgressControl({ value, colors, onValue }: { value: number; colo
       }}
       style={[styles.progressTrack, { backgroundColor: colors.backgroundElement }]}>
       <View pointerEvents="none" style={[styles.progressTrackFill, { backgroundColor: colors.backgroundSelected, width: trackWidth ? thumbLeft + thumbWidth / 2 : 0 }]} />
-      <View pointerEvents="none" style={[styles.progressThumb, { backgroundColor: colors.surface, shadowColor: colors.text }, trackWidth > 0 && { left: thumbLeft, width: thumbWidth }]}>
+      <View pointerEvents="none" style={[styles.progressThumb, { backgroundColor: colors.surface, boxShadow: `0 4px 8px ${colors.text}14` }, trackWidth > 0 && { left: thumbLeft, width: thumbWidth }]}>
         <Text style={[styles.progressThumbText, { color: colors.text }]}>{`${Math.round(localValue * 100)}%`}</Text>
       </View>
     </View>
@@ -476,11 +476,7 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.four,
     gap: Spacing.two,
     zIndex: 20,
-    shadowColor: Colors.light.text,
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 14,
-    elevation: 10,
+    boxShadow: '0 -4px 14px rgba(28,25,23,0.12)',
   },
   sheetTitleWrap: {
     paddingTop: Spacing.two,
@@ -603,11 +599,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.surface,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: Colors.light.text,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    boxShadow: '0 4px 8px rgba(28,25,23,0.08)',
   },
   progressThumbText: {
     fontSize: 15,

@@ -1,6 +1,7 @@
 import { BookOpen, Check } from 'lucide-react-native';
-import React, { memo } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import React from 'react';
+import { Image } from 'expo-image';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Radius, Spacing } from '@/constants/theme';
 import { useTranslation } from '@/lib/i18n';
@@ -17,7 +18,7 @@ type BookCardProps = {
   onLongPress: () => void;
 };
 
-function BookCardBase({ book, selected, selectionMode, width, colors = Colors.light, onPress, onLongPress }: BookCardProps) {
+export function BookCard({ book, selected, selectionMode, width, colors = Colors.light, onPress, onLongPress }: BookCardProps) {
   const { t } = useTranslation();
   const progress = Math.round(book.progress * 100);
   const isRead = progress >= 99;
@@ -41,7 +42,7 @@ function BookCardBase({ book, selected, selectionMode, width, colors = Colors.li
           selected && styles.selectedCover,
         ]}>
         {book.coverUri ? (
-          <Image source={{ uri: book.coverUri }} style={styles.coverImage} resizeMode="cover" />
+          <Image source={{ uri: book.coverUri }} style={styles.coverImage} contentFit="cover" />
         ) : (
           <View style={[styles.fallbackCover, { backgroundColor: colors.surface }]}>
             <BookOpen size={30} color={colors.text} />
@@ -76,8 +77,6 @@ function BookCardBase({ book, selected, selectionMode, width, colors = Colors.li
     </Pressable>
   );
 }
-
-export const BookCard = memo(BookCardBase);
 
 function getTitleTextStyle(title: string) {
   const weightedLength = Array.from(title).reduce((count, char) => count + (char.charCodeAt(0) > 255 ? 1 : 0.55), 0);

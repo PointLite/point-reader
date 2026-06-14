@@ -1,8 +1,9 @@
 import { router, useFocusEffect } from 'expo-router';
 import { GlassView, isGlassEffectAPIAvailable, isLiquidGlassAvailable } from 'expo-glass-effect';
 import { Check, ChevronLeft, ChevronRight } from 'lucide-react-native';
-import React, { useCallback, useEffect, useState } from 'react';
-import { Animated, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
+import React, { useState } from 'react';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
+import Animated, { useAnimatedStyle, useDerivedValue, withTiming } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ToastViewport, useToast } from '@/components/app-toast';
@@ -33,7 +34,7 @@ export default function SettingsScreen() {
   const currentLanguage = supportedAppLanguages.find((language) => language.code === settings.appLanguage) ?? supportedAppLanguages[0];
 
   useFocusEffect(
-    useCallback(() => {
+    () => {
       let isActive = true;
       setSettingsReady(false);
       loadReadingSettings()
@@ -54,7 +55,7 @@ export default function SettingsScreen() {
       return () => {
         isActive = false;
       };
-    }, [showToast, t])
+    }
   );
 
   const update = async (patch: Partial<ReadingSettings>) => {
@@ -197,7 +198,7 @@ export default function SettingsScreen() {
             accessibilityRole="button"
             accessibilityLabel={t('close')}
             onPress={() => setLanguageModalOpen(false)}
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
           />
           <View style={[styles.languageCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
             <Text style={[styles.languageTitle, { color: colors.text }]}>{t('language')}</Text>
@@ -248,27 +249,16 @@ function SegmentedControl<T extends string>({
   onChange: (value: T) => void;
 }) {
   const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
-  const [animatedIndex] = useState(() => new Animated.Value(selectedIndex));
   const optionGap = Spacing.one;
   const capsulePadding = Spacing.one;
   const thumbWidth = (width - capsulePadding * 2 - optionGap * (options.length - 1)) / options.length;
   const liquidGlassAvailable = canUseLiquidGlass();
-  const translateX = animatedIndex.interpolate({
-    inputRange: options.map((_, index) => index),
-    outputRange: options.map((_, index) => index * (thumbWidth + optionGap)),
-  });
-
-  useEffect(() => {
-    if (einkOptimization) {
-      animatedIndex.setValue(selectedIndex);
-      return;
-    }
-    Animated.timing(animatedIndex, {
-      toValue: selectedIndex,
-      duration: INTERACTION_ANIMATION_MS,
-      useNativeDriver: true,
-    }).start();
-  }, [animatedIndex, einkOptimization, selectedIndex]);
+  const animatedIndex = useDerivedValue(() =>
+    einkOptimization ? selectedIndex : withTiming(selectedIndex, { duration: INTERACTION_ANIMATION_MS })
+  );
+  const thumbStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: animatedIndex.get() * (thumbWidth + optionGap) }],
+  }));
 
   return (
     <View style={[styles.segmentedCapsule, { width, backgroundColor: liquidGlassAvailable ? 'transparent' : colors.backgroundElement }]}>
@@ -288,8 +278,8 @@ function SegmentedControl<T extends string>({
           {
             width: thumbWidth,
             backgroundColor: colors.accent,
-            transform: [{ translateX }],
           },
+          thumbStyle,
         ]}
       />
       {options.map((option) => {
@@ -398,7 +388,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   segmentedGlassBackground: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   segmentedThumb: {
     position: 'absolute',
