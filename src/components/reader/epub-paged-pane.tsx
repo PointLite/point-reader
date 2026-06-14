@@ -55,22 +55,24 @@ export function EpubPagedPane({
   onRecoverRequired: () => void;
 }) {
   const webViewRef = useRef<WebView>(null);
-  const initialIndexRef = useRef(initialIndex);
-  const initialOffsetRef = useRef(initialOffset > 0 && initialOffset <= 1 ? initialOffset : 0);
-  const initialProgressRef = useRef(initialProgress);
-  const initialSettingsRef = useRef(settings);
-  const [contentReady, setContentReady] = useState(initialProgressRef.current <= 0.015);
+  const [initialSnapshot] = useState(() => ({
+    index: initialIndex,
+    offset: initialOffset > 0 && initialOffset <= 1 ? initialOffset : 0,
+    progress: initialProgress,
+    settings,
+  }));
+  const [contentReady, setContentReady] = useState(initialSnapshot.progress <= 0.015);
   const html = useMemo(
     () =>
       createEpubPagedHtml(
         book,
-        initialSettingsRef.current,
+        initialSnapshot.settings,
         systemColorScheme,
-        initialIndexRef.current,
-        initialOffsetRef.current,
-        initialProgressRef.current
+        initialSnapshot.index,
+        initialSnapshot.offset,
+        initialSnapshot.progress
       ),
-    [book, systemColorScheme]
+    [book, initialSnapshot, systemColorScheme]
   );
   const source = useMemo(() => ({ html }), [html]);
 

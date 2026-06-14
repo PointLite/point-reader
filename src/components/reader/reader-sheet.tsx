@@ -8,8 +8,8 @@ import {
   RotateCw,
   SquareDashed,
 } from 'lucide-react-native';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ReaderMetricControl } from '@/components/reader/metric-control';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
@@ -19,13 +19,14 @@ import type { AppColors } from '@/lib/theme';
 import type { ReaderChapter, ReadingSettings } from '@/types/reader';
 
 const READER_TOOLBAR_HEIGHT = 68;
+const EMPTY_DISABLED_SHEETS: ('theme' | 'font')[] = [];
 
 export function ReaderSheet({
   sheet,
   settings,
   systemColorScheme,
   colors,
-  disabledSheets = [],
+  disabledSheets,
   progress,
   chapters,
   hasChapters,
@@ -54,10 +55,10 @@ export function ReaderSheet({
   resolveChapterIndex?: (href: string | undefined, fallbackIndex: number) => number;
 }) {
   const { t } = useTranslation();
-  const [localSettings, setLocalSettings] = useState(settings);
+  const resolvedDisabledSheets = disabledSheets ?? EMPTY_DISABLED_SHEETS;
   const tocListRef = useRef<ScrollView>(null);
-  const themeDisabled = disabledSheets.includes('theme');
-  const fontDisabled = disabledSheets.includes('font');
+  const themeDisabled = resolvedDisabledSheets.includes('theme');
+  const fontDisabled = resolvedDisabledSheets.includes('font');
   const sheetTitle = {
     toc: t('toc'),
     theme: t('background'),
@@ -65,13 +66,7 @@ export function ReaderSheet({
     font: t('font'),
   }[sheet];
 
-  useEffect(() => {
-    setLocalSettings(settings);
-  }, [settings]);
-
   const applyReaderSettings = (patch: Partial<ReadingSettings>) => {
-    const nextSettings = { ...localSettings, ...patch };
-    setLocalSettings(nextSettings);
     onStyleChange();
     onSettings(patch);
   };
@@ -141,7 +136,7 @@ export function ReaderSheet({
                 styles.swatch,
                 { backgroundColor: readerBackgrounds[name] },
                 { borderColor: colors.border },
-                localSettings.background === name && [styles.swatchSelected, { borderColor: colors.text }],
+                settings.background === name && [styles.swatchSelected, { borderColor: colors.text }],
               ]}
             />
           ))}
@@ -168,20 +163,20 @@ export function ReaderSheet({
         <View style={styles.fontPanel}>
           <ReaderMetricControl
             colors={colors}
-            value={localSettings.fontSize}
+            value={settings.fontSize}
             min={16}
             max={32}
             step={1}
             leftLabel="A"
             rightLabel="A"
-            valueLabel={`${localSettings.fontSize}`}
+            valueLabel={`${settings.fontSize}`}
             accessibilityLabel={t('fontSize')}
             onValue={(value) => applyReaderSettings({ fontSize: value })}
           />
           <View style={styles.metricGrid}>
             <ReaderMetricControl
               colors={colors}
-              value={localSettings.paddingScale}
+              value={settings.paddingScale}
               min={0.5}
               max={1.8}
               step={0.1}
@@ -195,7 +190,7 @@ export function ReaderSheet({
             />
             <ReaderMetricControl
               colors={colors}
-              value={localSettings.lineHeightScale}
+              value={settings.lineHeightScale}
               min={1.2}
               max={1.9}
               step={0.05}
@@ -385,37 +380,6 @@ function ReaderProgressControl({ value, colors, onValue }: { value: number; colo
     onValue(clamp(localValueRef.current, 0, 1));
   }, [onValue]);
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onStartShouldSetPanResponderCapture: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponderCapture: () => true,
-        onShouldBlockNativeResponder: () => true,
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderGrant: (event) => {
-          dragging.current = true;
-          controlRef.current?.measureInWindow((x) => {
-            controlPageX.current = x;
-            updateValueFromPageX(event.nativeEvent.pageX);
-          });
-        },
-        onPanResponderMove: (_, gestureState) => {
-          updateValueFromPageX(gestureState.moveX);
-        },
-        onPanResponderRelease: () => {
-          dragging.current = false;
-          commit();
-        },
-        onPanResponderTerminate: () => {
-          dragging.current = false;
-          commit();
-        },
-      }),
-    [commit, updateValueFromPageX]
-  );
-
   return (
     <View
       ref={controlRef}
@@ -434,8 +398,30 @@ function ReaderProgressControl({ value, colors, onValue }: { value: number; colo
         setTrackWidth(event.nativeEvent.layout.width);
         updateControlPageX();
       }}
-      style={[styles.progressTrack, { backgroundColor: colors.backgroundElement }]}
-      {...panResponder.panHandlers}>
+      onStartShouldSetResponder={() => true}
+      onStartShouldSetResponderCapture={() => true}
+      onMoveShouldSetResponder={() => true}
+      onMoveShouldSetResponderCapture={() => true}
+      onResponderTerminationRequest={() => false}
+      onResponderGrant={(event) => {
+        dragging.current = true;
+        controlRef.current?.measureInWindow((x) => {
+          controlPageX.current = x;
+          updateValueFromPageX(event.nativeEvent.pageX);
+        });
+      }}
+      onResponderMove={(event) => {
+        updateValueFromPageX(event.nativeEvent.pageX);
+      }}
+      onResponderRelease={() => {
+        dragging.current = false;
+        commit();
+      }}
+      onResponderTerminate={() => {
+        dragging.current = false;
+        commit();
+      }}
+      style={[styles.progressTrack, { backgroundColor: colors.backgroundElement }]}>
       <View pointerEvents="none" style={[styles.progressTrackFill, { backgroundColor: colors.backgroundSelected, width: trackWidth ? thumbLeft + thumbWidth / 2 : 0 }]} />
       <View pointerEvents="none" style={[styles.progressThumb, { backgroundColor: colors.surface, shadowColor: colors.text }, trackWidth > 0 && { left: thumbLeft, width: thumbWidth }]}>
         <Text style={[styles.progressThumbText, { color: colors.text }]}>{`${Math.round(localValue * 100)}%`}</Text>

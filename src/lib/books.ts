@@ -85,9 +85,7 @@ export async function createGroupForBooks(bookIds: string[], name?: string): Pro
     createdAt: now,
   };
   await db.runAsync('INSERT INTO groups (id, name, createdAt) VALUES (?, ?, ?)', group.id, group.name, group.createdAt);
-  for (const id of bookIds) {
-    await db.runAsync('UPDATE books SET groupId = ?, updatedAt = ? WHERE id = ?', group.id, now, id);
-  }
+  await Promise.all(bookIds.map((id) => db.runAsync('UPDATE books SET groupId = ?, updatedAt = ? WHERE id = ?', group.id, now, id)));
   return group;
 }
 
@@ -101,9 +99,7 @@ export async function updateGroupName(id: string, name: string) {
 export async function clearBooksGroup(bookIds: string[]) {
   const db = await getDb();
   const now = Date.now();
-  for (const id of bookIds) {
-    await db.runAsync('UPDATE books SET groupId = NULL, updatedAt = ? WHERE id = ?', now, id);
-  }
+  await Promise.all(bookIds.map((id) => db.runAsync('UPDATE books SET groupId = NULL, updatedAt = ? WHERE id = ?', now, id)));
 }
 
 export async function getBook(id: string): Promise<Book | null> {

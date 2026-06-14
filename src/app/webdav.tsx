@@ -67,6 +67,19 @@ type BrowseState = {
   history: { href?: string; label: string }[];
 };
 
+function configFor(directory: WebDavDirectory): WebDavConfig {
+  return {
+    url: directory.url,
+    username: directory.username,
+    password: directory.password,
+  };
+}
+
+function closeToHome() {
+  router.dismissAll();
+  router.replace('/');
+}
+
 export default function WebDavScreen() {
   const { width, height } = useWindowDimensions();
   const { t } = useTranslation();
@@ -107,7 +120,10 @@ export default function WebDavScreen() {
   }, [showToast, t]);
 
   useEffect(() => {
-    loadDirectories();
+    const timer = setTimeout(() => {
+      void loadDirectories();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [loadDirectories]);
 
   useEffect(() => {
@@ -134,31 +150,26 @@ export default function WebDavScreen() {
     await AsyncStorage.setItem(WEBDAV_DIRECTORIES_KEY, JSON.stringify(nextDirectories));
   };
 
-  const configFor = (directory: WebDavDirectory): WebDavConfig => ({
-    url: directory.url,
-    username: directory.username,
-    password: directory.password,
-  });
-
   const loadEntries = async (directory: WebDavDirectory, href?: string) => {
     const requestId = ++navigationRequestRef.current;
     setLoading(true);
+    let loaded = false;
     try {
       const nextEntries = await listWebDav(configFor(directory), href);
-      if (requestId !== navigationRequestRef.current) return false;
-      setEntries(nextEntries);
-      setSelectedHrefs([]);
-      return true;
+      if (requestId === navigationRequestRef.current) {
+        setEntries(nextEntries);
+        setSelectedHrefs([]);
+        loaded = true;
+      }
     } catch (error) {
       if (requestId === navigationRequestRef.current) {
         showToast(error instanceof Error ? error.message : t('webdavBrowseFailed'));
       }
-      return false;
-    } finally {
-      if (requestId === navigationRequestRef.current) {
-        setLoading(false);
-      }
     }
+    if (requestId === navigationRequestRef.current) {
+      setLoading(false);
+    }
+    return loaded;
   };
 
   const openDirectory = async (directory: WebDavDirectory) => {
@@ -296,11 +307,6 @@ export default function WebDavScreen() {
     void startWebDavImport(config, entriesToImport).catch((error) => {
       showToast(error instanceof Error ? error.message : t('importFailedShort'));
     });
-  };
-
-  const closeToHome = () => {
-    router.dismissAll();
-    router.replace('/');
   };
 
   const applySort = async (nextSort: WebDavSortState) => {
@@ -762,9 +768,8 @@ function DirectoryModal({
       showToast(t('webdavConnectionSuccessToast'));
     } catch {
       showToast(t('webdavConnectionFailedToast'));
-    } finally {
-      setTesting(false);
     }
+    setTesting(false);
   };
 
   return (
@@ -891,7 +896,7 @@ const AutoScrollText = memo(function AutoScrollText({
   text: string;
   textStyle: TextStyle | TextStyle[];
 }) {
-  const translateX = useRef(new Animated.Value(0)).current;
+  const [translateX] = useState(() => new Animated.Value(0));
   const [containerWidth, setContainerWidth] = useState(0);
   const estimatedWidth = useMemo(() => estimateEntryNameWidth(text), [text]);
   const [measuredWidth, setMeasuredWidth] = useState(0);

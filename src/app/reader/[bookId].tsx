@@ -154,6 +154,12 @@ export default function ReaderScreen() {
   const restoreProgressGuard = useRef<RestoreProgressGuard | null>(null);
   const epubRebuildTargetGuard = useRef<EpubRebuildTargetGuard | null>(null);
   const lastToolbarToggleAt = useRef(0);
+  const requestNonce = useRef(0);
+
+  const nextRequestNonce = () => {
+    requestNonce.current += 1;
+    return requestNonce.current;
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -243,7 +249,12 @@ export default function ReaderScreen() {
             const tocItems = nextEpub.toc.length
               ? nextEpub.toc
               : nextEpub.chapters.map((chapter) => ({ id: chapter.id, href: chapter.href, title: chapter.title.trim() }));
-            setEpubToc(tocItems.map((chapter) => ({ id: chapter.id, href: chapter.href, title: chapter.title.trim(), text: '' })).filter((chapter) => chapter.title.length > 0));
+            setEpubToc(
+              tocItems.flatMap((chapter) => {
+                const title = chapter.title.trim();
+                return title ? [{ id: chapter.id, href: chapter.href, title, text: '' }] : [];
+              })
+            );
             const { index: restoredIndex, offset: restoredOffset } = resolveEpubRestorePosition(nextBook, nextEpub);
             const restoredBook = { ...nextBook, currentChapter: restoredIndex, currentOffset: restoredOffset };
             setBook(restoredBook);
@@ -331,12 +342,7 @@ export default function ReaderScreen() {
   const disabledReaderSheets: ('theme' | 'font')[] = [];
   if (themeToolDisabled) disabledReaderSheets.push('theme');
   if (fontToolDisabled) disabledReaderSheets.push('font');
-
-  useEffect(() => {
-    if ((sheet === 'theme' && themeToolDisabled) || (sheet === 'font' && fontToolDisabled)) {
-      setSheet(null);
-    }
-  }, [fontToolDisabled, sheet, themeToolDisabled]);
+  const visibleSheet = (sheet === 'theme' && themeToolDisabled) || (sheet === 'font' && fontToolDisabled) ? null : sheet;
 
   const updateSettings = async (patch: Partial<ReadingSettings>) => {
     const next = { ...settings, ...patch };
@@ -382,6 +388,7 @@ export default function ReaderScreen() {
   }, [showToast, t]);
 
   const rebuildEpubReader = useCallback(async () => {
+    if (!mountedRef.current) return;
     await flushProgressSave();
     if (!mountedRef.current) return;
     setEpubReaderKey((key) => key + 1);
@@ -748,8 +755,8 @@ export default function ReaderScreen() {
         {showReaderPageButtons ? (
           <PageTurnButtons
             foregroundColor={foregroundColor}
-            onPrevious={() => setEpubPagedTurnRequest({ delta: settings.swapTapZones ? 1 : -1, nonce: Date.now() })}
-            onNext={() => setEpubPagedTurnRequest({ delta: settings.swapTapZones ? -1 : 1, nonce: Date.now() })}
+            onPrevious={() => setEpubPagedTurnRequest({ delta: settings.swapTapZones ? 1 : -1, nonce: nextRequestNonce() })}
+            onNext={() => setEpubPagedTurnRequest({ delta: settings.swapTapZones ? -1 : 1, nonce: nextRequestNonce() })}
           />
         ) : null}
       </View>
@@ -771,10 +778,10 @@ export default function ReaderScreen() {
         />
       ) : null}
 
-      {sheet ? (
+      {visibleSheet ? (
         <ReaderSheet
-          sheet={sheet}
-          settings={settingsRef.current}
+          sheet={visibleSheet}
+          settings={settings}
           systemColorScheme={systemColorScheme}
           colors={readerChromeColors}
           progress={displayProgress}
@@ -800,7 +807,7 @@ export default function ReaderScreen() {
               epubRebuildTargetGuard.current = {
                 index,
                 href,
-                until: Date.now() + EPUB_REBUILD_TARGET_GUARD_MS,
+                until: deadlineFromNow(EPUB_REBUILD_TARGET_GUARD_MS),
               };
               bookRef.current = nextBook;
               setBook(nextBook);
@@ -822,7 +829,7 @@ export default function ReaderScreen() {
               const nextOffset = targetBlock?.blockIndex ?? 0;
               setTextWindowStart(nextOffset);
               setRenderedBlockCount(Math.max(INITIAL_TEXT_BLOCKS, nextOffset + TEXT_BLOCK_INCREMENT * 3));
-              setTextScrollRequest({ blockIndex: nextOffset, nonce: Date.now() });
+              setTextScrollRequest({ blockIndex: nextOffset, nonce: nextRequestNonce() });
               const nextProgress = textBlocks.length ? nextOffset / textBlocks.length : 0;
               scheduleProgressSave(nextProgress, index, nextOffset);
             }
@@ -851,9 +858,9 @@ export default function ReaderScreen() {
             }}
             style={[
               styles.toolbarIconButton,
-              sheet === 'toc' && [styles.toolbarIconButtonActive, { backgroundColor: readerChromeColors.backgroundSelected }],
+              visibleSheet === 'toc' && [styles.toolbarIconButtonActive, { backgroundColor: readerChromeColors.backgroundSelected }],
             ]}>
-            <List size={28} strokeWidth={2.2} color={sheet === 'toc' ? toolbarIconActiveColor : toolbarIconColor} />
+            <List size={28} strokeWidth={2.2} color={visibleSheet === 'toc' ? toolbarIconActiveColor : toolbarIconColor} />
           </Pressable>
           <Pressable
             accessibilityRole="button"
@@ -866,13 +873,13 @@ export default function ReaderScreen() {
             }}
             style={[
               styles.toolbarIconButton,
-              sheet === 'theme' && [styles.toolbarIconButtonActive, { backgroundColor: readerChromeColors.backgroundSelected }],
+              visibleSheet === 'theme' && [styles.toolbarIconButtonActive, { backgroundColor: readerChromeColors.backgroundSelected }],
               themeToolDisabled && styles.toolbarIconButtonDisabled,
             ]}>
             <Sun
               size={28}
               strokeWidth={2.2}
-              color={themeToolDisabled ? disabledToolColor(toolbarIconColor) : sheet === 'theme' ? toolbarIconActiveColor : toolbarIconColor}
+              color={themeToolDisabled ? disabledToolColor(toolbarIconColor) : visibleSheet === 'theme' ? toolbarIconActiveColor : toolbarIconColor}
             />
           </Pressable>
           <Pressable
@@ -884,9 +891,9 @@ export default function ReaderScreen() {
             }}
             style={[
               styles.toolbarIconButton,
-              sheet === 'progress' && [styles.toolbarIconButtonActive, { backgroundColor: readerChromeColors.backgroundSelected }],
+              visibleSheet === 'progress' && [styles.toolbarIconButtonActive, { backgroundColor: readerChromeColors.backgroundSelected }],
             ]}>
-            <ProgressToolIcon color={sheet === 'progress' ? toolbarIconActiveColor : toolbarIconColor} backgroundColor={toolbarSurface} />
+            <ProgressToolIcon color={visibleSheet === 'progress' ? toolbarIconActiveColor : toolbarIconColor} backgroundColor={toolbarSurface} />
           </Pressable>
           <Pressable
             accessibilityRole="button"
@@ -899,13 +906,13 @@ export default function ReaderScreen() {
             }}
             style={[
               styles.toolbarIconButton,
-              sheet === 'font' && [styles.toolbarIconButtonActive, { backgroundColor: readerChromeColors.backgroundSelected }],
+              visibleSheet === 'font' && [styles.toolbarIconButtonActive, { backgroundColor: readerChromeColors.backgroundSelected }],
               fontToolDisabled && styles.toolbarIconButtonDisabled,
             ]}>
             <Type
               size={30}
               strokeWidth={2.1}
-              color={fontToolDisabled ? disabledToolColor(toolbarIconColor) : sheet === 'font' ? toolbarIconActiveColor : toolbarIconColor}
+              color={fontToolDisabled ? disabledToolColor(toolbarIconColor) : visibleSheet === 'font' ? toolbarIconActiveColor : toolbarIconColor}
             />
           </Pressable>
         </View>
@@ -990,9 +997,11 @@ function TextScrollPane({
 
   const onViewableItemsChanged = useCallback(
     ({ viewableItems }: { viewableItems: ViewToken<TextBlock>[] }) => {
-      const current = viewableItems
-        .filter((item) => item.isViewable && item.item)
-        .sort((a, b) => (a.index ?? Number.MAX_SAFE_INTEGER) - (b.index ?? Number.MAX_SAFE_INTEGER))[0]?.item;
+      const current = viewableItems.reduce<ViewToken<TextBlock> | null>((best, item) => {
+        if (!item.isViewable || !item.item) return best;
+        if (!best) return item;
+        return (item.index ?? Number.MAX_SAFE_INTEGER) < (best.index ?? Number.MAX_SAFE_INTEGER) ? item : best;
+      }, null)?.item;
       if (!current) return;
       const progress = totalBlocks ? current.blockIndex / totalBlocks : 0;
       onProgress(progress, current.chapterIndex, current.blockIndex);
@@ -1125,8 +1134,10 @@ function buildTextBlocks(chapters: ReaderChapter[]): TextBlock[] {
 function splitTextForVirtualList(text: string) {
   const paragraphs = text
     .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean);
+    .flatMap((paragraph) => {
+      const trimmed = paragraph.trim();
+      return trimmed ? [trimmed] : [];
+    });
   const source = paragraphs.length ? paragraphs : [text];
   const blocks: string[] = [];
 
@@ -1162,6 +1173,10 @@ function chaptersForSheet(format: Book['format'], epubToc: ReaderChapter[], chap
 function batteryPercentFromLevel(level: number) {
   if (!Number.isFinite(level) || level < 0) return null;
   return Math.round(clamp(level, 0, 1) * 100);
+}
+
+function deadlineFromNow(duration: number) {
+  return Date.now() + duration;
 }
 
 async function readBatteryPercent() {
@@ -1302,7 +1317,10 @@ function TapTextPane({
 
   useEffect(() => {
     if (!turnRequest) return;
-    move(turnRequest.delta);
+    const timer = setTimeout(() => {
+      move(turnRequest.delta);
+    }, 0);
+    return () => clearTimeout(timer);
   }, [move, turnRequest]);
 
   return (

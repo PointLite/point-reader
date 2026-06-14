@@ -86,7 +86,7 @@ export default function ShelfScreen() {
   const hasLoadedShelfRef = useRef(false);
   const refreshRequestRef = useRef(0);
   const restoredLastReaderRef = useRef(false);
-  const importSheetProgress = useRef(new Animated.Value(0)).current;
+  const [importSheetProgress] = useState(() => new Animated.Value(0));
   const importSheetAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
   const webDavImport = useWebDavImport();
 
@@ -112,13 +112,19 @@ export default function ShelfScreen() {
     return next;
   }, [books]);
   const folders = useMemo<FolderItem[]>(
-    () =>
-      groups
-        .map((group) => ({
+    () => {
+      const next: FolderItem[] = [];
+      for (const group of groups) {
+        const groupBooks = booksByGroupId.get(group.id) ?? [];
+        if (groupBooks.length > 0) {
+          next.push({
           ...group,
-          books: booksByGroupId.get(group.id) ?? [],
-        }))
-        .filter((group) => group.books.length > 0),
+            books: groupBooks,
+          });
+        }
+      }
+      return next;
+    },
     [booksByGroupId, groups]
   );
   const folderSelection = useMemo(
@@ -130,14 +136,21 @@ export default function ShelfScreen() {
   const hasListHeader = Boolean(activeGroup) || webDavImport.status !== 'idle';
   const shelfItems: ShelfItem[] = useMemo(() => {
     if (activeGroupId) {
-      return books
-        .filter((book) => book.groupId === activeGroupId)
-        .map((book) => ({ type: 'book' as const, book }));
+      const activeBooks: ShelfItem[] = [];
+      for (const book of books) {
+        if (book.groupId === activeGroupId) {
+          activeBooks.push({ type: 'book', book });
+        }
+      }
+      return activeBooks;
     }
 
-    const rootBooks = books
-      .filter((book) => !book.groupId)
-      .map((book) => ({ type: 'book' as const, book }));
+    const rootBooks: ShelfItem[] = [];
+    for (const book of books) {
+      if (!book.groupId) {
+        rootBooks.push({ type: 'book', book });
+      }
+    }
     return [
       ...folders.map((folder) => ({ type: 'folder' as const, folder })),
       ...rootBooks,
@@ -154,22 +167,23 @@ export default function ShelfScreen() {
     }
     try {
       const nextSort = await loadSortState();
-      if (refreshRequestRef.current !== requestId) return;
-      sortRef.current = nextSort;
-      setSort(nextSort);
-      const [nextBooks, nextGroups] = await Promise.all([searchBooks(queryRef.current, nextSort), listGroups()]);
-      if (refreshRequestRef.current !== requestId) return;
-      setBooks(nextBooks);
-      setGroups(nextGroups);
-      hasLoadedShelfRef.current = true;
+      if (refreshRequestRef.current === requestId) {
+        sortRef.current = nextSort;
+        setSort(nextSort);
+        const [nextBooks, nextGroups] = await Promise.all([searchBooks(queryRef.current, nextSort), listGroups()]);
+        if (refreshRequestRef.current === requestId) {
+          setBooks(nextBooks);
+          setGroups(nextGroups);
+          hasLoadedShelfRef.current = true;
+        }
+      }
     } catch (error) {
       if (refreshRequestRef.current === requestId) {
         showToast(error instanceof Error ? error.message : t('operationFailed'));
       }
-    } finally {
-      if (refreshRequestRef.current === requestId && shouldShowLoading) {
-        setLoading(false);
-      }
+    }
+    if (refreshRequestRef.current === requestId && shouldShowLoading) {
+      setLoading(false);
     }
   }, [showToast, t]);
 
@@ -269,9 +283,8 @@ export default function ShelfScreen() {
       await refresh();
     } catch (error) {
       showToast(error instanceof Error ? error.message : t('importFilePickerFailed'));
-    } finally {
-      setImporting(false);
     }
+    setImporting(false);
   }, [refresh, showToast, t]);
 
   const closeImportOptions = useCallback(

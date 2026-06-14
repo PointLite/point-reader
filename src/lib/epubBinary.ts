@@ -1,6 +1,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 
 const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const BASE64_VALUES = new Map([...BASE64_CHARS].map((char, index) => [char, index]));
 const textDecoder = new TextDecoder();
 
 export async function readFileAsBytes(fileUri: string) {
@@ -56,8 +57,8 @@ function base64ToUint8(base64: string) {
   let index = 0;
 
   for (const char of clean) {
-    const value = BASE64_CHARS.indexOf(char);
-    if (value < 0) continue;
+    const value = BASE64_VALUES.get(char);
+    if (value === undefined) continue;
     buffer = (buffer << 6) | value;
     bits += 6;
     if (bits >= 8) {

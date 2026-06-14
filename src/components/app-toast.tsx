@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import React, { createContext, use, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
@@ -40,7 +40,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 export function useToast() {
-  const showToast = useContext(ToastActionContext);
+  const showToast = use(ToastActionContext);
   if (!showToast) {
     throw new Error('useToast must be used within ToastProvider');
   }
@@ -48,7 +48,7 @@ export function useToast() {
 }
 
 export function ToastViewport({ colors }: { colors: AppColors }) {
-  const message = useContext(ToastMessageContext);
+  const message = use(ToastMessageContext);
   const { height } = useWindowDimensions();
 
   if (!message) return null;

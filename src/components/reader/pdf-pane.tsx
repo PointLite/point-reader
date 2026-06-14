@@ -16,7 +16,7 @@ type PdfPaneProps = {
 
 export function PdfPane({ book, colors, seekRequest, turnRequest, onProgress, onToggleToolbar }: PdfPaneProps) {
   const pdfRef = useRef<PdfRef>(null);
-  const initialPage = useRef(Math.max(1, book.currentChapter || 1)).current;
+  const [initialPage] = useState(() => Math.max(1, book.currentChapter || 1));
   const source = useMemo(() => ({ uri: book.fileUri }), [book.fileUri]);
   const [pageCount, setPageCount] = useState(0);
   const currentPageRef = useRef(initialPage);

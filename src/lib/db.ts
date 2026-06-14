@@ -31,8 +31,10 @@ export async function getDb() {
       createdAt INTEGER NOT NULL
     );
   `);
-  await ensureColumn(db, 'books', 'currentLocation', 'TEXT');
-  await ensureColumn(db, 'books', 'groupId', 'TEXT');
+  await Promise.all([
+    ensureColumn(db, 'books', 'currentLocation', 'TEXT'),
+    ensureColumn(db, 'books', 'groupId', 'TEXT'),
+  ]);
 
   return db;
 }

@@ -1,17 +1,25 @@
 import { router, useFocusEffect } from 'expo-router';
+import { GlassView, isGlassEffectAPIAvailable, isLiquidGlassAvailable } from 'expo-glass-effect';
 import { Check, ChevronLeft, ChevronRight } from 'lucide-react-native';
-import React, { useCallback, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Animated, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ToastViewport, useToast } from '@/components/app-toast';
 import { SettingRow } from '@/components/setting-row';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
 import { supportedAppLanguages, useTranslation } from '@/lib/i18n';
-import { animateLayoutIfEnabled } from '@/lib/motion';
+import { INTERACTION_ANIMATION_MS, animateLayoutIfEnabled } from '@/lib/motion';
 import { defaultReadingSettings, loadReadingSettings, saveReadingSettings } from '@/lib/settings';
-import { appThemeFor } from '@/lib/theme';
+import { appThemeFor, type AppColors } from '@/lib/theme';
 import type { ReadingSettings } from '@/types/reader';
+
+const MODE_SEGMENT_WIDTH = 150;
+const SCHEME_SEGMENT_WIDTH = 220;
+
+function canUseLiquidGlass() {
+  return Platform.OS === 'ios' && isGlassEffectAPIAvailable() && isLiquidGlassAvailable();
+}
 
 export default function SettingsScreen() {
   const { t } = useTranslation();
@@ -19,17 +27,33 @@ export default function SettingsScreen() {
   const nativeColorScheme = useColorScheme();
   const systemScheme = nativeColorScheme === 'dark' ? 'dark' : 'light';
   const [settings, setSettings] = useState<ReadingSettings>(defaultReadingSettings);
+  const [settingsReady, setSettingsReady] = useState(false);
   const [languageModalOpen, setLanguageModalOpen] = useState(false);
   const { colors } = appThemeFor(settings.colorScheme, systemScheme);
   const currentLanguage = supportedAppLanguages.find((language) => language.code === settings.appLanguage) ?? supportedAppLanguages[0];
 
   useFocusEffect(
     useCallback(() => {
+      let isActive = true;
+      setSettingsReady(false);
       loadReadingSettings()
-        .then(setSettings)
+        .then((storedSettings) => {
+          if (!isActive) {
+            return;
+          }
+          setSettings(storedSettings);
+          setSettingsReady(true);
+        })
         .catch((error) => {
+          if (!isActive) {
+            return;
+          }
+          setSettingsReady(true);
           showToast(error instanceof Error ? error.message : t('operationFailed'));
         });
+      return () => {
+        isActive = false;
+      };
     }, [showToast, t])
   );
 
@@ -58,121 +82,113 @@ export default function SettingsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        <SettingRow
-          colors={colors}
-          title={t('alwaysShowStatusBar')}
-          description={t('alwaysShowStatusBarDesc')}
-          value={settings.alwaysShowStatusBar}
-          onValueChange={(value) => update({ alwaysShowStatusBar: value })}
-        />
-        <SettingRow
-          colors={colors}
-          title={t('keepAwake')}
-          description={t('keepAwakeDesc')}
-          value={settings.keepAwake}
-          onValueChange={(value) => update({ keepAwake: value })}
-        />
-        <SettingRow
-          colors={colors}
-          title={t('einkOptimization')}
-          description={t('einkOptimizationDesc')}
-          value={settings.einkOptimization}
-          onValueChange={(value) => update({ einkOptimization: value })}
-        />
-
-        <View style={[styles.panel, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t('language')}
-            onPress={() => setLanguageModalOpen(true)}
-            style={({ pressed }) => [styles.optionRow, pressed && styles.pressed]}>
-            <Text style={[styles.panelTitle, { color: colors.text }]}>{t('language')}</Text>
-            <View style={styles.optionValueGroup}>
-              <Text style={[styles.optionValue, { color: colors.textSecondary }]}>{t(currentLanguage.labelKey)}</Text>
-              <ChevronRight size={20} color={colors.textSecondary} />
-            </View>
-          </Pressable>
-        </View>
-
-        <View style={[styles.panel, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-          <View style={styles.modeRow}>
-            <Text style={[styles.panelTitle, { color: colors.text }]}>{t('theme')}</Text>
-            <View style={[styles.schemeCapsule, { backgroundColor: colors.backgroundElement }]}>
-              {(['light', 'dark', 'system'] as ReadingSettings['colorScheme'][]).map((colorScheme) => {
-                const selected = settings.colorScheme === colorScheme;
-                const label = colorScheme === 'light' ? t('themeLight') : colorScheme === 'dark' ? t('themeDark') : t('themeSystem');
-                return (
-                  <Pressable
-                    key={colorScheme}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${t('theme')}${label}`}
-                    accessibilityState={{ selected }}
-                    onPress={() => update({ colorScheme })}
-                    style={[styles.schemeOption, selected && { backgroundColor: colors.accent }]}>
-                    <Text style={[styles.modeOptionText, { color: colors.text }, selected && { color: colors.surface }]}>{label}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-        </View>
-
-        <View style={[styles.panel, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-          <View style={styles.modeRow}>
-            <Text style={[styles.panelTitle, { color: colors.text }]}>{t('pageTurnMode')}</Text>
-            <View style={[styles.modeCapsule, { backgroundColor: colors.backgroundElement }]}>
-              {(['scroll', 'tap'] as ReadingSettings['mode'][]).map((mode) => {
-                const selected = settings.mode === mode;
-                return (
-                  <Pressable
-                    key={mode}
-                    accessibilityRole="button"
-                    accessibilityLabel={mode === 'scroll' ? t('scrollTurn') : t('tapTurn')}
-                    accessibilityState={{ selected }}
-                    onPress={() => update({ mode })}
-                    style={[styles.modeOption, selected && { backgroundColor: colors.accent }]}>
-                    <Text style={[styles.modeOptionText, { color: colors.text }, selected && { color: colors.surface }]}>
-                      {mode === 'scroll' ? t('scroll') : t('tap')}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-        </View>
-
-        {settings.mode === 'scroll' ? (
-          <SettingRow
-            colors={colors}
-            title={t('hideScrollbar')}
-            description={t('hideScrollbarDesc')}
-            value={settings.hideScrollbar}
-            onValueChange={(value) => update({ hideScrollbar: value })}
-          />
-        ) : (
+        {settingsReady ? (
           <>
             <SettingRow
               colors={colors}
-              title={t('swapTapZones')}
-              description={t('swapTapZonesDesc')}
-              value={settings.swapTapZones}
-              onValueChange={(value) => update({ swapTapZones: value })}
+              title={t('alwaysShowStatusBar')}
+              description={t('alwaysShowStatusBarDesc')}
+              value={settings.alwaysShowStatusBar}
+              onValueChange={(value) => update({ alwaysShowStatusBar: value })}
             />
             <SettingRow
               colors={colors}
-              title={t('volumeTurnPage')}
-              description={t('volumeTurnPageDesc')}
-              value={settings.volumeTurnPage}
-              onValueChange={(value) => update({ volumeTurnPage: value })}
+              title={t('keepAwake')}
+              description={t('keepAwakeDesc')}
+              value={settings.keepAwake}
+              onValueChange={(value) => update({ keepAwake: value })}
             />
             <SettingRow
               colors={colors}
-              title={t('showPageButtons')}
-              value={settings.showPageButtons}
-              onValueChange={(value) => update({ showPageButtons: value })}
+              title={t('einkOptimization')}
+              description={t('einkOptimizationDesc')}
+              value={settings.einkOptimization}
+              onValueChange={(value) => update({ einkOptimization: value })}
             />
+
+            <View style={[styles.panel, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('language')}
+                onPress={() => setLanguageModalOpen(true)}
+                style={({ pressed }) => [styles.optionRow, pressed && styles.pressed]}>
+                <Text style={[styles.panelTitle, { color: colors.text }]}>{t('language')}</Text>
+                <View style={styles.optionValueGroup}>
+                  <Text style={[styles.optionValue, { color: colors.textSecondary }]}>{t(currentLanguage.labelKey)}</Text>
+                  <ChevronRight size={20} color={colors.textSecondary} />
+                </View>
+              </Pressable>
+            </View>
+
+            <View style={[styles.panel, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+              <View style={styles.modeRow}>
+                <Text style={[styles.panelTitle, { color: colors.text }]}>{t('theme')}</Text>
+                <SegmentedControl
+                  colors={colors}
+                  width={SCHEME_SEGMENT_WIDTH}
+                  options={[
+                    { value: 'light', label: t('themeLight'), accessibilityLabel: `${t('theme')}${t('themeLight')}` },
+                    { value: 'dark', label: t('themeDark'), accessibilityLabel: `${t('theme')}${t('themeDark')}` },
+                    { value: 'system', label: t('themeSystem'), accessibilityLabel: `${t('theme')}${t('themeSystem')}` },
+                  ]}
+                  value={settings.colorScheme}
+                  einkOptimization={settings.einkOptimization}
+                  onChange={(colorScheme) => update({ colorScheme })}
+                />
+              </View>
+            </View>
+
+            <View style={[styles.panel, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+              <View style={styles.modeRow}>
+                <Text style={[styles.panelTitle, { color: colors.text }]}>{t('pageTurnMode')}</Text>
+                <SegmentedControl
+                  colors={colors}
+                  width={MODE_SEGMENT_WIDTH}
+                  options={[
+                    { value: 'scroll', label: t('scroll'), accessibilityLabel: t('scrollTurn') },
+                    { value: 'tap', label: t('tap'), accessibilityLabel: t('tapTurn') },
+                  ]}
+                  value={settings.mode}
+                  einkOptimization={settings.einkOptimization}
+                  onChange={(mode) => update({ mode })}
+                />
+              </View>
+            </View>
+
+            {settings.mode === 'scroll' ? (
+              <SettingRow
+                colors={colors}
+                title={t('hideScrollbar')}
+                description={t('hideScrollbarDesc')}
+                value={settings.hideScrollbar}
+                onValueChange={(value) => update({ hideScrollbar: value })}
+              />
+            ) : (
+              <>
+                <SettingRow
+                  colors={colors}
+                  title={t('swapTapZones')}
+                  description={t('swapTapZonesDesc')}
+                  value={settings.swapTapZones}
+                  onValueChange={(value) => update({ swapTapZones: value })}
+                />
+                <SettingRow
+                  colors={colors}
+                  title={t('volumeTurnPage')}
+                  description={t('volumeTurnPageDesc')}
+                  value={settings.volumeTurnPage}
+                  onValueChange={(value) => update({ volumeTurnPage: value })}
+                />
+                <SettingRow
+                  colors={colors}
+                  title={t('showPageButtons')}
+                  value={settings.showPageButtons}
+                  onValueChange={(value) => update({ showPageButtons: value })}
+                />
+              </>
+            )}
           </>
-        )}
+        ) : null}
       </ScrollView>
 
       <Modal visible={languageModalOpen} transparent animationType={settings.einkOptimization ? 'none' : 'fade'} onRequestClose={() => setLanguageModalOpen(false)}>
@@ -213,6 +229,84 @@ export default function SettingsScreen() {
         </View>
       </Modal>
     </SafeAreaView>
+  );
+}
+
+function SegmentedControl<T extends string>({
+  colors,
+  width,
+  options,
+  value,
+  einkOptimization,
+  onChange,
+}: {
+  colors: AppColors;
+  width: number;
+  options: { value: T; label: string; accessibilityLabel: string }[];
+  value: T;
+  einkOptimization: boolean;
+  onChange: (value: T) => void;
+}) {
+  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
+  const [animatedIndex] = useState(() => new Animated.Value(selectedIndex));
+  const optionGap = Spacing.one;
+  const capsulePadding = Spacing.one;
+  const thumbWidth = (width - capsulePadding * 2 - optionGap * (options.length - 1)) / options.length;
+  const liquidGlassAvailable = canUseLiquidGlass();
+  const translateX = animatedIndex.interpolate({
+    inputRange: options.map((_, index) => index),
+    outputRange: options.map((_, index) => index * (thumbWidth + optionGap)),
+  });
+
+  useEffect(() => {
+    if (einkOptimization) {
+      animatedIndex.setValue(selectedIndex);
+      return;
+    }
+    Animated.timing(animatedIndex, {
+      toValue: selectedIndex,
+      duration: INTERACTION_ANIMATION_MS,
+      useNativeDriver: true,
+    }).start();
+  }, [animatedIndex, einkOptimization, selectedIndex]);
+
+  return (
+    <View style={[styles.segmentedCapsule, { width, backgroundColor: liquidGlassAvailable ? 'transparent' : colors.backgroundElement }]}>
+      {liquidGlassAvailable ? (
+        <GlassView
+          pointerEvents="none"
+          glassEffectStyle="regular"
+          tintColor={colors.backgroundElement}
+          colorScheme="auto"
+          style={styles.segmentedGlassBackground}
+        />
+      ) : null}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.segmentedThumb,
+          {
+            width: thumbWidth,
+            backgroundColor: colors.accent,
+            transform: [{ translateX }],
+          },
+        ]}
+      />
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <Pressable
+            key={option.value}
+            accessibilityRole="button"
+            accessibilityLabel={option.accessibilityLabel}
+            accessibilityState={{ selected }}
+            onPress={() => onChange(option.value)}
+            style={styles.segmentedOption}>
+            <Text style={[styles.modeOptionText, { color: colors.text }, selected && { color: colors.surface }]}>{option.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
@@ -293,40 +387,32 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: Spacing.three,
   },
-  modeCapsule: {
+  segmentedCapsule: {
+    position: 'relative',
     flexDirection: 'row',
-    width: 150,
     minHeight: 40,
     borderRadius: 20,
     backgroundColor: Colors.light.backgroundElement,
     padding: Spacing.one,
     gap: Spacing.one,
+    overflow: 'hidden',
   },
-  schemeCapsule: {
-    flexDirection: 'row',
-    width: 220,
-    minHeight: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.light.backgroundElement,
-    padding: Spacing.one,
-    gap: Spacing.one,
+  segmentedGlassBackground: {
+    ...StyleSheet.absoluteFillObject,
   },
-  modeOption: {
+  segmentedThumb: {
+    position: 'absolute',
+    left: Spacing.one,
+    top: Spacing.one,
+    bottom: Spacing.one,
+    borderRadius: 16,
+  },
+  segmentedOption: {
     flex: 1,
     minHeight: 32,
-    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  schemeOption: {
-    flex: 1,
-    minHeight: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modeOptionSelected: {
-    backgroundColor: Colors.light.accent,
+    zIndex: 1,
   },
   modeOptionText: {
     fontSize: 14,

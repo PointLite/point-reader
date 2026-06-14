@@ -41,12 +41,8 @@ export async function importPickedBooks(): Promise<Book[]> {
   });
 
   if (result.canceled) return [];
-  const imported: Book[] = [];
-  for (const asset of result.assets) {
-    const book = await importBookFile(asset.uri, asset.name, 'local');
-    if (book) imported.push(book);
-  }
-  return imported;
+  const imported = await Promise.all(result.assets.map((asset) => importBookFile(asset.uri, asset.name, 'local')));
+  return imported.filter((book): book is Book => Boolean(book));
 }
 
 export async function importBookFile(

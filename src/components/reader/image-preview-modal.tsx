@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Image, Modal, PanResponder, StyleSheet, View, useWindowDimensions } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Animated, Image, Modal, StyleSheet, View, useWindowDimensions } from 'react-native';
 
 import { useTranslation } from '@/lib/i18n';
 import { modalAnimationType } from '@/lib/motion';
@@ -19,12 +19,13 @@ export function ImagePreviewModal({
   const { t } = useTranslation();
   const { width, height } = useWindowDimensions();
   const [imageRatio, setImageRatio] = useState(1);
-  const scale = useRef(new Animated.Value(1)).current;
-  const translateX = useRef(new Animated.Value(0)).current;
-  const translateY = useRef(new Animated.Value(0)).current;
+  const [scale] = useState(() => new Animated.Value(1));
+  const [translateX] = useState(() => new Animated.Value(0));
+  const [translateY] = useState(() => new Animated.Value(0));
   const scaleValue = useRef(1);
   const offsetValue = useRef({ x: 0, y: 0 });
   const panStart = useRef({ x: 0, y: 0 });
+  const gestureStart = useRef({ x: 0, y: 0 });
   const pinchStartDistance = useRef(0);
   const pinchStartScale = useRef(1);
   const tapStart = useRef({ x: 0, y: 0, time: 0 });
@@ -60,9 +61,10 @@ export function ImagePreviewModal({
   }, [uri]);
 
   const setPreviewOffset = useCallback(
-    (x: number, y: number, nextScale = scaleValue.current) => {
-      const maxX = Math.max(0, (previewWidth * nextScale - width) / 2);
-      const maxY = Math.max(0, (previewHeight * nextScale - height) / 2);
+    (x: number, y: number, nextScale?: number) => {
+      const resolvedScale = nextScale ?? scaleValue.current;
+      const maxX = Math.max(0, (previewWidth * resolvedScale - width) / 2);
+      const maxY = Math.max(0, (previewHeight * resolvedScale - height) / 2);
       const nextX = clamp(x, -maxX, maxX);
       const nextY = clamp(y, -maxY, maxY);
       offsetValue.current = { x: nextX, y: nextY };
@@ -72,12 +74,16 @@ export function ImagePreviewModal({
     [height, previewHeight, previewWidth, translateX, translateY, width]
   );
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dx) > 2 || Math.abs(gestureState.dy) > 2,
-        onPanResponderGrant: (event) => {
+  return (
+    <Modal visible={Boolean(uri)} transparent animationType={modalAnimationType(einkOptimization)} onRequestClose={onClose}>
+      <View
+        accessible
+        accessibilityRole="imagebutton"
+        accessibilityLabel={t('imagePreviewClose')}
+        style={styles.backdrop}
+        onStartShouldSetResponder={() => true}
+        onMoveShouldSetResponder={() => true}
+        onResponderGrant={(event) => {
           const touches = event.nativeEvent.touches;
           didPinch.current = touches.length >= 2;
           if (touches.length >= 2) {
@@ -87,22 +93,28 @@ export function ImagePreviewModal({
           }
           didDrag.current = false;
           panStart.current = offsetValue.current;
+          gestureStart.current = {
+            x: event.nativeEvent.pageX,
+            y: event.nativeEvent.pageY,
+          };
           tapStart.current = {
             x: event.nativeEvent.pageX,
             y: event.nativeEvent.pageY,
-            time: Date.now(),
+            time: event.nativeEvent.timestamp,
           };
-        },
-        onPanResponderMove: (event, gestureState) => {
+        }}
+        onResponderMove={(event) => {
           const touches = event.nativeEvent.touches;
           if (touches.length < 2) {
             const canMoveX = previewWidth * scaleValue.current > width;
             const canMoveY = previewHeight * scaleValue.current > height;
             if (!canMoveX && !canMoveY) return;
-            if (Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3) {
+            const dx = event.nativeEvent.pageX - gestureStart.current.x;
+            const dy = event.nativeEvent.pageY - gestureStart.current.y;
+            if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
               didDrag.current = true;
             }
-            setPreviewOffset(panStart.current.x + gestureState.dx, panStart.current.y + gestureState.dy);
+            setPreviewOffset(panStart.current.x + dx, panStart.current.y + dy);
             return;
           }
           didPinch.current = true;
@@ -116,8 +128,8 @@ export function ImagePreviewModal({
           scaleValue.current = nextScale;
           scale.setValue(nextScale);
           setPreviewOffset(offsetValue.current.x, offsetValue.current.y, nextScale);
-        },
-        onPanResponderRelease: (event) => {
+        }}
+        onResponderRelease={(event) => {
           if (didPinch.current) {
             didPinch.current = false;
             return;
@@ -130,27 +142,15 @@ export function ImagePreviewModal({
 
           const dx = Math.abs(event.nativeEvent.pageX - tapStart.current.x);
           const dy = Math.abs(event.nativeEvent.pageY - tapStart.current.y);
-          const duration = Date.now() - tapStart.current.time;
+          const duration = event.nativeEvent.timestamp - tapStart.current.time;
           if (dx < 10 && dy < 10 && duration < 360) {
             onClose();
           }
-        },
-        onPanResponderTerminate: () => {
+        }}
+        onResponderTerminate={() => {
           didPinch.current = false;
           didDrag.current = false;
-        },
-      }),
-    [height, onClose, previewHeight, previewWidth, scale, setPreviewOffset, width]
-  );
-
-  return (
-    <Modal visible={Boolean(uri)} transparent animationType={modalAnimationType(einkOptimization)} onRequestClose={onClose}>
-      <View
-        accessible
-        accessibilityRole="imagebutton"
-        accessibilityLabel={t('imagePreviewClose')}
-        style={styles.backdrop}
-        {...panResponder.panHandlers}>
+        }}>
         {uri ? (
           <Animated.View
             style={[

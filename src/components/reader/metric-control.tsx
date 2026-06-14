@@ -1,6 +1,6 @@
 import { type LucideIcon } from 'lucide-react-native';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PanResponder, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
 import { useTranslation } from '@/lib/i18n';
@@ -81,8 +81,8 @@ export function ReaderMetricControl({
   );
 
   const commitValue = useCallback(
-    (nextValue = localValueRef.current) => {
-      const normalized = normalizeValue(nextValue);
+    (nextValue?: number) => {
+      const normalized = normalizeValue(nextValue ?? localValueRef.current);
       localValueRef.current = normalized;
       emittedValueRef.current = normalized;
       setLocalValue(normalized);
@@ -122,38 +122,6 @@ export function ReaderMetricControl({
     [updateValueFromTrackX]
   );
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onStartShouldSetPanResponderCapture: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponderCapture: () => true,
-        onShouldBlockNativeResponder: () => true,
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderGrant: (event) => {
-          dragging.current = true;
-          controlRef.current?.measureInWindow((x) => {
-            controlPageX.current = x;
-            updateValueFromPageX(event.nativeEvent.pageX);
-          });
-        },
-        onPanResponderMove: (_, gestureState) => {
-          if (!trackWidth) return;
-          updateValueFromPageX(gestureState.moveX);
-        },
-        onPanResponderRelease: () => {
-          dragging.current = false;
-          commitValue();
-        },
-        onPanResponderTerminate: () => {
-          dragging.current = false;
-          commitValue();
-        },
-      }),
-    [commitValue, trackWidth, updateValueFromPageX]
-  );
-
   return (
     <View
       ref={controlRef}
@@ -162,7 +130,30 @@ export function ReaderMetricControl({
         setTrackWidth(event.nativeEvent.layout.width);
         updateControlPageX();
       }}
-      {...panResponder.panHandlers}>
+      onStartShouldSetResponder={() => true}
+      onStartShouldSetResponderCapture={() => true}
+      onMoveShouldSetResponder={() => true}
+      onMoveShouldSetResponderCapture={() => true}
+      onResponderTerminationRequest={() => false}
+      onResponderGrant={(event) => {
+        dragging.current = true;
+        controlRef.current?.measureInWindow((x) => {
+          controlPageX.current = x;
+          updateValueFromPageX(event.nativeEvent.pageX);
+        });
+      }}
+      onResponderMove={(event) => {
+        if (!trackWidth) return;
+        updateValueFromPageX(event.nativeEvent.pageX);
+      }}
+      onResponderRelease={() => {
+        dragging.current = false;
+        commitValue();
+      }}
+      onResponderTerminate={() => {
+        dragging.current = false;
+        commitValue();
+      }}>
       <View pointerEvents="none" style={styles.metricTrackLabels}>
         <Text style={[styles.metricSideText, { color: colors.text }, compact && styles.metricSideTextCompact]}>{leftLabel}</Text>
         <Text style={[styles.metricSideText, styles.metricSideTextLarge, { color: colors.text }, compact && styles.metricSideTextCompact]}>{rightLabel}</Text>

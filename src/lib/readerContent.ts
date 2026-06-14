@@ -47,8 +47,10 @@ export async function loadTextChapters(book: Book): Promise<ReaderChapter[]> {
   const normalized = raw.replace(/\r\n/g, '\n').trim();
   const chunks = normalized
     .split(/\n(?=(第.{1,12}[章节回卷部篇]|Chapter\s+\d+|CHAPTER\s+\d+))/g)
-    .map((chunk) => chunk.trim())
-    .filter(Boolean);
+    .flatMap((chunk) => {
+      const trimmed = chunk.trim();
+      return trimmed ? [trimmed] : [];
+    });
 
   const source = chunks.length > 1 ? chunks : splitBySize(normalized, 5200);
   return source.map((text, index) => ({

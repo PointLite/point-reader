@@ -146,11 +146,21 @@ function extractDates(metadata: any) {
 
 function extractMetaContent(metadata: any, names: string[]) {
   const metaItems = toArray<any>(metadata?.meta);
+  const byName = new Map<string, any>();
+  const byProperty = new Map<string, any>();
+  for (const item of metaItems) {
+    if (item.name && item.content && !byName.has(item.name)) {
+      byName.set(item.name, item);
+    }
+    if (item.property && (item['#text'] || item.content) && !byProperty.has(item.property)) {
+      byProperty.set(item.property, item);
+    }
+  }
   for (const name of names) {
-    const byName = metaItems.find((item) => item.name === name && item.content);
-    if (byName?.content) return String(byName.content).trim();
-    const byProperty = metaItems.find((item) => item.property === name && (item['#text'] || item.content));
-    const value = byProperty?.['#text'] ?? byProperty?.content;
+    const nameItem = byName.get(name);
+    if (nameItem?.content) return String(nameItem.content).trim();
+    const propertyItem = byProperty.get(name);
+    const value = propertyItem?.['#text'] ?? propertyItem?.content;
     if (value) return String(value).trim();
   }
   return undefined;
