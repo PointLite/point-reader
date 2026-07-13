@@ -37,7 +37,7 @@ export type ReadingSettings = {
   volumeTurnPage: boolean;
   showPageButtons: boolean;
   background: 'white' | 'gray' | 'yellow' | 'green';
-  fontFamily: 'system' | 'serif' | 'mono';
+  fontFamily: 'system' | 'notoSansCjk' | 'notoSerifCjk' | 'serif' | 'mono';
   fontSize: number;
   paddingScale: number;
   lineHeightScale: number;

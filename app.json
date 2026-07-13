@@ -35,6 +35,15 @@
     "plugins": [
       "expo-router",
       [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/NotoSansCJKsc-Regular.otf",
+            "./assets/fonts/NotoSerifCJKsc-Regular.otf"
+          ]
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#F5F2E8",

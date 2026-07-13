@@ -13,6 +13,7 @@ function canUseLiquidGlass() {
 
 export function SegmentedControl<T extends string>({
   colors,
+  colorScheme,
   width,
   options,
   value,
@@ -20,6 +21,7 @@ export function SegmentedControl<T extends string>({
   onChange,
 }: {
   colors: AppColors;
+  colorScheme: 'light' | 'dark';
   width: number;
   options: { value: T; label: string; accessibilityLabel: string }[];
   value: T;
@@ -30,7 +32,7 @@ export function SegmentedControl<T extends string>({
   const optionGap = Spacing.one;
   const capsulePadding = Spacing.one;
   const thumbWidth = (width - capsulePadding * 2 - optionGap * (options.length - 1)) / options.length;
-  const liquidGlassAvailable = canUseLiquidGlass();
+  const useLiquidGlass = canUseLiquidGlass() && colorScheme === 'light';
   const animatedIndex = useDerivedValue(() =>
     einkOptimization ? selectedIndex : withTiming(selectedIndex, { duration: INTERACTION_ANIMATION_MS })
   );
@@ -39,13 +41,17 @@ export function SegmentedControl<T extends string>({
   }));
 
   return (
-    <View style={[styles.segmentedCapsule, { width, backgroundColor: liquidGlassAvailable ? 'transparent' : colors.backgroundElement }]}>
-      {liquidGlassAvailable ? (
+    <View
+      style={[
+        styles.segmentedCapsule,
+        { width, backgroundColor: useLiquidGlass ? 'transparent' : colors.backgroundElement },
+      ]}>
+      {useLiquidGlass ? (
         <GlassView
           pointerEvents="none"
           glassEffectStyle="regular"
           tintColor={colors.backgroundElement}
-          colorScheme="auto"
+          colorScheme={colorScheme}
           style={styles.segmentedGlassBackground}
         />
       ) : null}

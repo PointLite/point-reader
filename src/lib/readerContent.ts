@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 
+import { nativeReaderFontFamilyFor } from '@/lib/readerFonts';
 import type { Book, ReaderChapter, ReadingSettings } from '@/types/reader';
 
 export const readerBackgrounds: Record<ReadingSettings['background'], string> = {
@@ -31,9 +32,7 @@ export function readerForegroundFor(settings: ReadingSettings, systemScheme?: 'l
 }
 
 export function fontFamilyFor(setting: ReadingSettings['fontFamily']) {
-  if (setting === 'serif') return 'serif';
-  if (setting === 'mono') return 'monospace';
-  return undefined;
+  return nativeReaderFontFamilyFor(setting);
 }
 
 export async function loadTextChapters(book: Book): Promise<ReaderChapter[]> {

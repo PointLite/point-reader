@@ -15,7 +15,7 @@ export const defaultReadingSettings: ReadingSettings = {
   volumeTurnPage: false,
   showPageButtons: false,
   background: 'white',
-  fontFamily: 'serif',
+  fontFamily: 'notoSansCjk',
   fontSize: 23,
   paddingScale: 0,
   lineHeightScale: 1.45,
@@ -33,7 +33,12 @@ export async function loadReadingSettings(): Promise<ReadingSettings> {
   const raw = await AsyncStorage.getItem(SETTINGS_KEY);
   if (!raw) return defaultReadingSettings;
   const parsed = JSON.parse(raw);
-  return { ...defaultReadingSettings, ...parsed, appLanguage: normalizeAppLanguage(parsed.appLanguage) };
+  return {
+    ...defaultReadingSettings,
+    ...parsed,
+    appLanguage: normalizeAppLanguage(parsed.appLanguage),
+    fontFamily: normalizeFontFamily(parsed.fontFamily),
+  };
 }
 
 export async function saveReadingSettings(settings: ReadingSettings) {
@@ -65,4 +70,17 @@ function defaultAppLanguage(): ReadingSettings['appLanguage'] {
 function normalizeAppLanguage(value: unknown): ReadingSettings['appLanguage'] {
   if (value === 'zh' || value === 'en') return value;
   return defaultAppLanguage();
+}
+
+function normalizeFontFamily(value: unknown): ReadingSettings['fontFamily'] {
+  if (
+    value === 'system' ||
+    value === 'notoSansCjk' ||
+    value === 'notoSerifCjk' ||
+    value === 'serif' ||
+    value === 'mono'
+  ) {
+    return value;
+  }
+  return defaultReadingSettings.fontFamily;
 }

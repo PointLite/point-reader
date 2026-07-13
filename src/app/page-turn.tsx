@@ -23,7 +23,7 @@ export default function PageTurnSettingsScreen() {
   const systemScheme = nativeColorScheme === 'dark' ? 'dark' : 'light';
   const [settings, setSettings] = useState<ReadingSettings>(defaultReadingSettings);
   const [settingsReady, setSettingsReady] = useState(false);
-  const { colors } = appThemeFor(settings.colorScheme, systemScheme);
+  const { colors, isDark } = appThemeFor(settings.colorScheme, systemScheme);
 
   useFocusEffect(
     () => {
@@ -78,6 +78,7 @@ export default function PageTurnSettingsScreen() {
                 <Text style={[styles.panelTitle, { color: colors.text }]}>{t('pageTurnMode')}</Text>
                 <SegmentedControl
                   colors={colors}
+                  colorScheme={isDark ? 'dark' : 'light'}
                   width={MODE_SEGMENT_WIDTH}
                   options={[
                     { value: 'scroll', label: t('scroll'), accessibilityLabel: t('scrollTurn') },

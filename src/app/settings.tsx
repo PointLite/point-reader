@@ -24,7 +24,7 @@ export default function SettingsScreen() {
   const systemScheme = nativeColorScheme === 'dark' ? 'dark' : 'light';
   const [settings, setSettings] = useState<ReadingSettings>(defaultReadingSettings);
   const [settingsReady, setSettingsReady] = useState(false);
-  const { colors } = appThemeFor(settings.colorScheme, systemScheme);
+  const { colors, isDark } = appThemeFor(settings.colorScheme, systemScheme);
   const currentLanguage = supportedAppLanguages.find((language) => language.code === settings.appLanguage) ?? supportedAppLanguages[0];
   const appVersion = Constants.expoConfig?.version ?? '0.1.0';
 
@@ -107,6 +107,7 @@ export default function SettingsScreen() {
                 <Text style={[styles.panelTitle, { color: colors.text }]}>{t('theme')}</Text>
                 <SegmentedControl
                   colors={colors}
+                  colorScheme={isDark ? 'dark' : 'light'}
                   width={SCHEME_SEGMENT_WIDTH}
                   options={[
                     { value: 'light', label: t('themeLight'), accessibilityLabel: `${t('theme')}${t('themeLight')}` },

@@ -4,6 +4,7 @@ import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 
 import type { EpubHtmlBook } from '@/lib/epubContent';
 import { readerBackgroundFor, readerForegroundFor } from '@/lib/readerContent';
+import { webReaderFontFamilyFor } from '@/lib/readerFonts';
 import type { ReadingSettings } from '@/types/reader';
 
 type EpubScrollCommand = 'jumpTo' | 'jumpToHref' | 'jumpToOffset' | 'applySettings' | 'resume';
@@ -186,7 +187,7 @@ function createEpubCssVars(settings: ReadingSettings, systemColorScheme?: 'light
   const padding = Math.round(18 + settings.paddingScale * 18);
   const background = readerBackgroundFor(settings, systemColorScheme);
   const foreground = readerForegroundFor(settings, systemColorScheme);
-  const fontFamily = settings.fontFamily === 'serif' ? 'serif' : settings.fontFamily === 'mono' ? 'monospace' : 'sans-serif';
+  const fontFamily = webReaderFontFamilyFor(settings.fontFamily);
 
   return {
     background,

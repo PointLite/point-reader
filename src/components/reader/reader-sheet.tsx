@@ -9,12 +9,13 @@ import {
   SquareDashed,
 } from 'lucide-react-native';
 import React, { useEffect, useReducer, useRef, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ReaderMetricControl } from '@/components/reader/metric-control';
 import { Colors, Radius, Spacing, TouchTarget } from '@/constants/theme';
 import { useTranslation } from '@/lib/i18n';
 import { readerBackgrounds } from '@/lib/readerContent';
+import { nativeReaderFontFamilyFor, readerFontOptions } from '@/lib/readerFonts';
 import type { AppColors } from '@/lib/theme';
 import type { ReaderChapter, ReadingSettings } from '@/types/reader';
 
@@ -175,7 +176,41 @@ export function ReaderSheet({
         />
       ) : null}
       {sheet === 'font' && !fontDisabled ? (
-        <View style={styles.fontPanel}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          style={styles.fontPanelScroll}
+          contentContainerStyle={styles.fontPanel}>
+          <View style={styles.fontFamilyGrid}>
+            {readerFontOptions.map((font) => {
+              const selected = settings.fontFamily === font.value;
+              return (
+                <Pressable
+                  key={font.value}
+                  accessibilityRole="button"
+                  accessibilityLabel={t(font.labelKey)}
+                  accessibilityState={{ selected }}
+                  onPress={() => applyReaderSettings({ fontFamily: font.value })}
+                  style={[
+                    styles.fontFamilyButton,
+                    { borderColor: colors.border, backgroundColor: colors.surface },
+                    selected && { borderColor: colors.text, backgroundColor: colors.backgroundSelected },
+                  ]}>
+                  <Text
+                    allowFontScaling={false}
+                    numberOfLines={1}
+                    style={[
+                      styles.fontFamilyPreview,
+                      { color: colors.text, fontFamily: nativeReaderFontFamilyFor(font.value) },
+                    ]}>
+                    {font.preview}
+                  </Text>
+                  <Text numberOfLines={1} style={[styles.fontFamilyLabel, { color: colors.textSecondary }]}>
+                    {t(font.labelKey)}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
           <ReaderMetricControl
             colors={colors}
             value={settings.fontSize}
@@ -218,7 +253,7 @@ export function ReaderSheet({
               onValue={(value) => applyReaderSettings({ lineHeightScale: value })}
             />
           </View>
-        </View>
+        </ScrollView>
       ) : null}
     </View>
   );
@@ -535,6 +570,36 @@ const styles = StyleSheet.create({
   },
   fontPanel: {
     gap: Spacing.four,
+    paddingBottom: Spacing.one,
+  },
+  fontPanelScroll: {
+    maxHeight: 320,
+  },
+  fontFamilyGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
+  },
+  fontFamilyButton: {
+    width: '31.5%',
+    minWidth: 96,
+    minHeight: 74,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.two,
+    justifyContent: 'center',
+    gap: Spacing.one,
+  },
+  fontFamilyPreview: {
+    fontSize: 19,
+    lineHeight: 24,
+    fontWeight: '500',
+  },
+  fontFamilyLabel: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
   },
   metricGrid: {
     flexDirection: 'row',

@@ -16,7 +16,7 @@ import { useAppTheme, type AppColors } from '@/lib/theme';
 const appIcon = require('../../assets/images/icon.png');
 
 function resourceBundleVersion() {
-  return Updates.updateId?.split('-')[0] ?? null;
+  return Updates.updateId?.split('-')[0] || null;
 }
 
 export default function AboutScreen() {
@@ -25,7 +25,7 @@ export default function AboutScreen() {
   const { colors } = useAppTheme();
   const [checking, setChecking] = useState(false);
   const appVersion = Constants.expoConfig?.version ?? '0.1.0';
-  const bundleVersion = resourceBundleVersion() ?? t('resourceBundleEmbedded');
+  const bundleVersion = resourceBundleVersion() ?? 'embedded';
 
   const checkForUpdates = async () => {
     if (checking) return;

@@ -4,6 +4,7 @@ import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 
 import type { EpubHtmlBook } from '@/lib/epubContent';
 import { readerBackgroundFor, readerForegroundFor } from '@/lib/readerContent';
+import { webReaderFontFamilyFor } from '@/lib/readerFonts';
 import type { ReadingSettings } from '@/types/reader';
 
 type EpubPagedCommand = 'go' | 'jumpTo' | 'jumpToHref' | 'jumpToOffset' | 'seekToProgress' | 'applySettings' | 'resume';
@@ -189,10 +190,12 @@ function createEpubCssVars(settings: ReadingSettings, systemColorScheme?: 'light
   const padding = Math.round(18 + settings.paddingScale * 18);
   const background = readerBackgroundFor(settings, systemColorScheme);
   const foreground = readerForegroundFor(settings, systemColorScheme);
+  const fontFamily = webReaderFontFamilyFor(settings.fontFamily);
 
   return {
     background,
     foreground,
+    fontFamily,
     fontSize: `${settings.fontSize}px`,
     lineHeight: String(settings.lineHeightScale),
     padding: `${padding}px`,
@@ -218,13 +221,13 @@ function createEpubPagedHtml(
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <style>
 ${book.css}
-:root { --reader-bg: ${vars.background}; --reader-fg: ${vars.foreground}; --reader-font-size: ${vars.fontSize}; --reader-line-height: ${vars.lineHeight}; --reader-padding: ${vars.padding}; }
-html, body { width: 100%; max-width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; overscroll-behavior-x: none; background: var(--reader-bg); color: var(--reader-fg); font-family: sans-serif; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+:root { --reader-bg: ${vars.background}; --reader-fg: ${vars.foreground}; --reader-font-family: ${vars.fontFamily}; --reader-font-size: ${vars.fontSize}; --reader-line-height: ${vars.lineHeight}; --reader-padding: ${vars.padding}; }
+html, body { width: 100%; max-width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; overscroll-behavior-x: none; background: var(--reader-bg); color: var(--reader-fg); font-family: var(--reader-font-family); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { position: fixed; inset: 0; touch-action: pan-y; }
 #viewport { position: fixed; inset: 0; overflow: hidden; background: var(--reader-bg); }
 #content { height: 100vh; column-gap: 0; column-fill: auto; transform: translate3d(0, 0, 0); will-change: transform; }
-.chapter { box-sizing: border-box; width: 100vw; max-width: 100vw; min-height: 100vh; padding: 24px var(--reader-padding) 40px; font-size: var(--reader-font-size) !important; line-height: var(--reader-line-height) !important; overflow-wrap: anywhere; word-break: break-word; overflow-x: hidden; break-before: column; page-break-before: always; }
-.chapter p, .chapter div, .chapter span, .chapter section, .chapter article, .chapter li, .chapter blockquote, .chapter h1, .chapter h2, .chapter h3, .chapter h4, .chapter h5, .chapter h6, .chapter strong, .chapter em, .chapter b, .chapter i, .chapter ruby, .chapter rt { font-size: var(--reader-font-size) !important; line-height: var(--reader-line-height) !important; }
+.chapter { box-sizing: border-box; width: 100vw; max-width: 100vw; min-height: 100vh; padding: 24px var(--reader-padding) 40px; font-family: var(--reader-font-family) !important; font-size: var(--reader-font-size) !important; line-height: var(--reader-line-height) !important; overflow-wrap: anywhere; word-break: break-word; overflow-x: hidden; break-before: column; page-break-before: always; }
+.chapter p, .chapter div, .chapter span, .chapter section, .chapter article, .chapter li, .chapter blockquote, .chapter h1, .chapter h2, .chapter h3, .chapter h4, .chapter h5, .chapter h6, .chapter strong, .chapter em, .chapter b, .chapter i, .chapter ruby, .chapter rt { font-family: inherit !important; font-size: var(--reader-font-size) !important; line-height: var(--reader-line-height) !important; }
 .chapter:first-child { break-before: auto; page-break-before: auto; }
 .chapter img, .chapter svg, .chapter video, .chapter canvas, .chapter iframe { width: auto !important; max-width: 100% !important; min-width: 0 !important; height: auto !important; box-sizing: border-box; }
 .chapter table { width: 100% !important; max-width: 100% !important; min-width: 0 !important; table-layout: fixed; border-collapse: collapse; box-sizing: border-box; }
@@ -304,6 +307,7 @@ body { position: fixed; inset: 0; touch-action: pan-y; }
     section.style.setProperty('overflow-x', 'hidden', 'important');
     section.style.setProperty('margin-left', '0', 'important');
     section.style.setProperty('margin-right', '0', 'important');
+    section.style.setProperty('font-family', 'var(--reader-font-family)', 'important');
     section.style.setProperty('font-size', 'var(--reader-font-size)', 'important');
     section.style.setProperty('line-height', 'var(--reader-line-height)', 'important');
     section.style.setProperty('padding-left', 'var(--reader-padding)', 'important');
@@ -316,6 +320,7 @@ body { position: fixed; inset: 0; touch-action: pan-y; }
       nodes[index].style.setProperty('width', 'auto', 'important');
       nodes[index].style.setProperty('margin-left', '0', 'important');
       nodes[index].style.setProperty('margin-right', '0', 'important');
+      nodes[index].style.setProperty('font-family', 'inherit', 'important');
       nodes[index].style.setProperty('font-size', 'var(--reader-font-size)', 'important');
       nodes[index].style.setProperty('line-height', 'var(--reader-line-height)', 'important');
     }
@@ -525,6 +530,7 @@ body { position: fixed; inset: 0; touch-action: pan-y; }
     var style = document.documentElement.style;
     style.setProperty('--reader-bg', vars.background);
     style.setProperty('--reader-fg', vars.foreground);
+    style.setProperty('--reader-font-family', vars.fontFamily);
     style.setProperty('--reader-font-size', vars.fontSize);
     style.setProperty('--reader-line-height', vars.lineHeight);
     style.setProperty('--reader-padding', vars.padding);
