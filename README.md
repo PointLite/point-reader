@@ -19,8 +19,8 @@ Point Reader 是一款主要面向电子墨水屏设备的本地电子书阅读�
 
 ## 技术栈
 
-- Expo SDK 55
-- React 19 / React Native 0.83
+- Expo SDK 57
+- React 19.2.3 / React Native 0.86.3
 - Expo Router
 - SQLite 本地数据存储
 - WebView 自实现 EPUB 阅读容器
@@ -45,17 +45,22 @@ npx expo run:android
 代码检查：
 
 ```bash
-npm run typecheck
-npm run lint
+npm run check
+npm run format:check
+npm run doctor
 ```
 
 ## 目录结构
 
 ```text
-src/app              路由页面
-src/components       通用组件和阅读器组件
-src/lib              数据、导入、阅读内容、WebDAV、设置等逻辑
-src/types            共享类型
-assets/images        应用图标和启动图资源
-ios / android        原生工程
+src/app              Expo Router 入口
+src/features/library 书库、导入、书架、详情
+src/features/reader  阅读会话、设备状态、EPUB/TXT/PDF 容器
+src/features/settings 设置快照与设置页面
+src/features/webdav  WebDAV 浏览、协议、递归导入
+src/shared           SQLite、主题、翻译、通用 UI
+tests               存储兼容与阅读/导入回归测试
+assets               图标、启动图和字体
 ```
+
+开发与测试要求 Node.js 22.13 以上。升级 SDK 后请重新构建开发客户端；iOS/Android 原生工程由 Expo prebuild 生成。原生运行需要开发构建（PDF、音量键等原生模块无法通过 Expo Go 完整验证）。

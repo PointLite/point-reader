@@ -1,13 +1,12 @@
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
-import { ToastProvider, ToastViewport } from '@/components/app-toast';
-import { useEinkOptimization } from '@/lib/motion';
-import { readerFontAssets } from '@/lib/readerFonts';
-import { useAppTheme } from '@/lib/theme';
+import { readerFontAssets } from '@/features/reader/font-assets';
+import { useEinkOptimization } from '@/shared/theme/motion';
+import { useAppTheme } from '@/shared/theme/theme';
+import { ToastProvider, ToastViewport } from '@/shared/ui/app-toast';
 
 export default function RootLayout() {
   const { colors, statusBarStyle } = useAppTheme();

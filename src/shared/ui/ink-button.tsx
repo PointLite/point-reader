@@ -1,0 +1,72 @@
+import type { LucideIcon } from 'lucide-react-native';
+import { Pressable, StyleSheet, Text, type ViewStyle } from 'react-native';
+
+import type { AppColors } from '@/shared/theme/theme';
+import { Colors, Radius, Spacing, TouchTarget } from '@/shared/theme/tokens';
+
+type InkButtonProps = {
+  label: string;
+  onPress: () => void;
+  icon?: LucideIcon;
+  variant?: 'primary' | 'secondary' | 'quiet' | 'danger';
+  selected?: boolean;
+  disabled?: boolean;
+  style?: ViewStyle;
+  colors?: AppColors;
+};
+
+export function InkButton({
+  label,
+  onPress,
+  icon: Icon,
+  variant = 'secondary',
+  selected,
+  disabled,
+  style,
+  colors = Colors.light,
+}: InkButtonProps) {
+  const isPrimary = variant === 'primary';
+  const isDanger = variant === 'danger';
+  const backgroundColor =
+    selected || isPrimary ? colors.accent : variant === 'quiet' ? 'transparent' : colors.surfaceMuted;
+  const color = selected || isPrimary ? colors.surface : isDanger ? colors.danger : colors.text;
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.button,
+        {
+          backgroundColor,
+          borderColor: selected || isPrimary ? colors.accent : isDanger ? colors.danger : colors.border,
+          opacity: disabled ? 0.42 : pressed ? 0.78 : 1,
+        },
+        style,
+      ]}>
+      {Icon ? <Icon size={18} color={color} strokeWidth={2} /> : null}
+      <Text style={[styles.label, { color }]} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  button: {
+    minHeight: TouchTarget,
+    borderWidth: 1,
+    borderRadius: Radius.medium,
+    paddingHorizontal: Spacing.three,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+  label: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+});
